@@ -179,6 +179,37 @@ tdp-trino:
         mountPath: /data/trino
     additionalJVMConfig: []
 
+    # Spread workers evenly across nodes (at most 1 worker of difference
+    # between any two nodes). ScheduleAnyway: never leaves a worker Pending
+    # on small or single-node clusters. matchLabelKeys scopes the count to
+    # the worker's own ReplicaSet, so a rolling update or another Trino
+    # release in the namespace does not skew placement. The selector is
+    # literal because the vendored chart renders this with toYaml (no tpl):
+    # setting tdp-trino.nameOverride silently disables spreading. Set to []
+    # to disable.
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: tdp-trino
+            app.kubernetes.io/component: worker
+        matchLabelKeys:
+          - pod-template-hash
+
+    # Drain running tasks before a worker stops (HPA/KEDA scale-down,
+    # rollout, node drain). There is no retry-policy configured, so without
+    # this every stopped worker fails the queries that had tasks on it.
+    # The vendored chart adds a preStop hook (PUT /v1/info/state on
+    # http://localhost:8080 as user "admin") and requires
+    # terminationGracePeriodSeconds >= 2 x gracePeriodSeconds. Conflicts
+    # with worker.lifecycle.
+    gracefulShutdown:
+      enabled: true
+      gracePeriodSeconds: 120
+    terminationGracePeriodSeconds: 300
+
   jmx:
     enabled: true
 
@@ -195,6 +226,15 @@ tdp-trino:
     #   s3.aws-secret-key=<s3-secret-key>
     #   s3.path-style-access=true
 
+
+# PodDisruptionBudget for the workers only (voluntary disruptions such as
+# node drains). The coordinator is a single replica and intentionally has
+# no PDB: minAvailable 1 on it would block every drain of its node. Does
+# not apply to HPA/KEDA scale-down (the ReplicaSet deletes pods directly);
+# that case is covered by tdp-trino.worker.gracefulShutdown.
+workerPodDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
 
 # PVC configuration for Trino certificates (disabled by default)
 trinoCerts:

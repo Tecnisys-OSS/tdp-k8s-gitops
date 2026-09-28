@@ -48,11 +48,14 @@ tdp-hive-metastore:
       port: 5432
 
     # Database settings (used by both internal and external).
+    # Credentials always reach the metastore through the Secret <release>-hive-database
+    # (keys username/password/database), never through the ConfigMap:
+    # - enabled=true: the chart renders that Secret from the values below.
+    # - enabled=false + TDP-Settings.externalDatabase.enabled=true: the db-create-job
+    #   hook creates it with a generated password (password below is unused).
+    # - enabled=false without the hooks: create the Secret yourself before installing.
     database: hive
     username: hive
-    # If you use a fixed password, set it here or via an existing Secret.
-    # When using external PostgreSQL with TDP hooks enabled, a Secret is created automatically
-    # with a generated password: <release>-hive-database.
     password: "hive"
 
     # Security context overrides specific to the internal postgres Deployment.
@@ -74,28 +77,60 @@ tdp-hive-metastore:
         drop:
           - ALL
 
-    # Use secret created by db-create-job (name will be constructed in template)
-    # existingSecret: "{{ .Release.Name }}-hive-database"
-    existingSecretPasswordKey: "password"
-
   # Metastore configuration.
   # Define the type of metastore storage: 'file' or 's3'.
   metastore:
-    image: registry.tecnisys.com.br/tdp/images/hive-metastore:4.0.0-1
+    # Chart and image ship together: this chart requires 4.0.0-2+.
+    image: registry.tecnisys.com.br/tdp/images/hive-metastore:4.0.0-2
     type: file
+
+    # Number of metastore replicas (also used by the connection-pool guard).
+    # Under ArgoCD, ignore /spec/replicas in the Application so self-heal does not
+    # undo tdp-license-operator's scale-to-zero (see README).
+    replicas: 1
 
     file:
       warehouseDir: /opt/hive/warehouse
 
-    # S3 settings used when metastore.type=s3.
+    # S3 settings used when metastore.type=s3 (e.g. tdp-ozone's S3 Gateway on :9878).
+    # accessKey/secretKey are rendered into the Secret <release>-hive-s3.
     s3:
       warehouseDir: s3a://warehouse/hive
       bucket: warehouse
-      endpoint: "http://<S3_SERVICE>.<NAMESPACE>.svc.cluster.local:9000"
+      endpoint: "http://<S3_SERVICE>.<NAMESPACE>.svc.cluster.local:9878"
       accessKey: "<S3_ACCESS_KEY>"
       secretKey: "<S3_SECRET_KEY>"
       pathStyleAccess: true
       region: us-east-1
+
+    # Thrift server worker threads.
+    minThreads: 20
+    maxThreads: 200
+
+    # JDBC connection pools (HikariCP). Per replica Hive opens objectstore, txn and
+    # mutex pools of up to maxPoolSize each, plus ~15 fixed connections
+    # (objectstore-secondary 2, compactor 5, objectstore-compactor 5).
+    # Peak per replica ≈ 3 × maxPoolSize + 15 (150 ⇒ 465).
+    # PostgreSQL max_connections ≥ (3 × maxPoolSize + 15) × replicas + other clients.
+    # With the internal PostgreSQL the render fails when this does not hold.
+    connectionPool:
+      maxPoolSize: 150  # -> datanucleus.connectionPool.maxPoolSize
+      minPoolSize: 10   # -> hikaricp.minimumIdle (idle floor per pool; ~40 idle connections per replica)
+
+    resources:
+      requests:
+        cpu: "1"
+        memory: 3Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+    # JVM heap: heapSize ("3g", "3072m") fixes -Xmx; when empty the heap is
+    # maxRAMPercentage of resources.limits.memory (75% of 4Gi ≈ 3Gi).
+    jvm:
+      heapSize: ""
+      maxRAMPercentage: 75
+      extraOpts: ""
 
 # TDP-specific settings (hooks and integrations)
 TDP-Settings:

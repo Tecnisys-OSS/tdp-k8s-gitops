@@ -34,7 +34,10 @@ tdp-ranger:
     - name: tdp-registry
 
   # Optional mounts for external integration assets, such as a dedicated
-  # Ranger client keystore/truststore used to call NiFi over SSL.
+  # Ranger client keystore/truststore used to call NiFi over SSL. Wired into
+  # ranger-deployment.yaml's initContainers/volumes/volumeMounts (main Ranger
+  # admin pod only) — see values-nifi-ranger-authorizer.yaml for a real
+  # consumer.
   extraInitContainers: []
   extraVolumes: []
   extraVolumeMounts: []
@@ -50,6 +53,16 @@ tdp-ranger:
     # Use a strong password (minimum 8 chars with uppercase, lowercase, number, and special char).
     # This default is an example and must be changed before production use.
     adminPassword: "ChangeMe!2026"
+    # Optional: source the admin password from an existing Secret instead of
+    # the literal above. Leave adminExistingSecret empty to keep the literal
+    # (default, unchanged behavior). Mirrors existingSecret/
+    # existingSecretPasswordKey below (used for the DB password) — the
+    # Secret must be created out-of-band by the operator (same convention as
+    # ldap.bind.passwordSecret), e.g.:
+    #   kubectl create secret generic ranger-admin-credentials \
+    #     --from-literal=password='<strong-password>' -n <namespace>
+    adminExistingSecret: ""
+    adminExistingSecretPasswordKey: "password"
     # Database credentials
     dbUser: "ranger"
     # This default is an example and must be changed before production use.

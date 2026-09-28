@@ -88,45 +88,24 @@ tdp-superset:
     #       name: tdp-superset-postgresql-secrets
     #       key: superset-postgresql-password
     
-    # - name: LDAP_ENABLED
-    #   value: "true"
-    # - name: AUTH_LDAP_SERVER
-    #   value: "ldap://<ldap-host>:389"  # Update to match tdp-superset.ldap.server.url
-    # - name: AUTH_LDAP_USE_TLS
-    #   value: "False"  # Update to match tdp-superset.ldap.server.useTls
-    # - name: AUTH_LDAP_BIND_USER
-    #   value: "<ldap-bind-user-dn>"  # Update to match tdp-superset.ldap.bind.user
+    # LDAP: every non-secret field below is now read directly from
+    # tdp-superset.ldap.* by configOverrides.ldap_config (tpl-rendered by
+    # the vendored chart) — see that block further down in this file. The
+    # bind password is the one field that MUST stay here as a real env var,
+    # since Helm cannot template a live Secret's value into a ConfigMap.
+    # Uncomment when enabling LDAP (matches ldap.bind.passwordSecret below):
     # - name: AUTH_LDAP_BIND_PASSWORD
     #   valueFrom:
     #     secretKeyRef:
     #       name: tdp-superset-ldap-secret
     #       key: bind-password
-    # - name: AUTH_LDAP_SEARCH
-    #   value: "<ldap-search-base>"  # Update to match tdp-superset.ldap.search.base
-    # - name: AUTH_LDAP_SEARCH_FILTER
-    #   value: "(objectClass=person)"
-    # - name: AUTH_LDAP_UID_FIELD
-    #   value: "uid"
-    # - name: AUTH_LDAP_FIRSTNAME_FIELD
-    #   value: "givenName"
-    # - name: AUTH_LDAP_LASTNAME_FIELD
-    #   value: "sn"
-    # - name: AUTH_LDAP_EMAIL_FIELD
-    #   value: "mail"
-    # - name: AUTH_USER_REGISTRATION
-    #   value: "True"
-    # - name: AUTH_USER_REGISTRATION_ROLE
-    #   value: "Public"
-    # - name: AUTH_ROLES_MAPPING
-    #   value: '{}'  # Example: '{"cn=admins,ou=groups,dc=example,dc=com": ["Admin"]}'
-    # - name: AUTH_LDAP_GROUP_FIELD
-    #   value: "memberOf"
-    # - name: AUTH_ROLES_SYNC_AT_LOGIN
-    #   value: "True"
 
   ldap:
-    # Enable/disable LDAP authentication
-    # When true, extraEnvRaw above should also be enabled with LDAP vars
+    # Enable/disable LDAP authentication. Genuinely consumed by
+    # configOverrides.ldap_config below (tpl-rendered by the vendored
+    # chart) — mirrors the same pattern tdp-airflow.ldap already uses.
+    # The bind password is the only field NOT read from here directly;
+    # see extraEnvRaw above and bind.passwordSecret below.
     enabled: false
     server:
       url: "ldap://<ldap-host>:389"
@@ -157,7 +136,16 @@ tdp-superset:
     port: 8088
     annotations: {}
 
-  # Ingress configuration
+  # Ingress configuration — controlled exclusively by
+  # TDP-Settings.gateway.ingress.enabled below. Do NOT set `enabled: true`
+  # here: because of the `alias: tdp-superset` in Chart.yaml, this whole
+  # block (including `enabled`) is passed straight through as
+  # `.Values.ingress` to the vendored Superset subchart, whose own
+  # templates/ingress.yaml renders its OWN Ingress from this same
+  # `enabled` flag — with the same release name as the wrapper's
+  # templates/ingress.yaml (superset.fullname resolves identically in
+  # both), producing two colliding Ingress objects. templates/ingress.yaml
+  # also fails the render outright if both toggles are ever true at once.
   ingress:
     enabled: false
     ingressClassName: ""
@@ -186,7 +174,9 @@ tdp-superset:
     # Database connection configuration for metadata database
     connections:
       # Redis configuration
-      redis_host: "{{ .Release.Name }}-redis-headless"
+      # .Release.Name sanitized to match the redis subchart's actual Service
+      # name (see "Release.Name in a hostname" in CLAUDE.md's Helm charts conventions).
+      redis_host: '{{ regexReplaceAll "(-?[^a-z\\d\\-])+-?" (lower .Release.Name) "-" }}-redis-headless'
       redis_port: "6379"
       redis_user: ""
       redis_cache_db: "1"
@@ -197,7 +187,8 @@ tdp-superset:
       # External DB: set db_host to "<postgresql-service>.<namespace>.svc.cluster.local"
       #              and db_pass to "" (will be overridden by DB_PASS env var from Secret)
       db_type: "postgresql"
-      db_host: "{{ .Release.Name }}-postgresql"
+      # Same sanitization as redis_host above (see CLAUDE.md).
+      db_host: '{{ regexReplaceAll "(-?[^a-z\\d\\-])+-?" (lower .Release.Name) "-" }}-postgresql'
       db_port: "5432"
       db_user: "superset"
       db_pass: "superset"
@@ -308,50 +299,50 @@ tdp-superset:
       readOnly: true
 
   # ── LDAP Authentication (disabled by default) ──────────────────────────────
-  # AUTH_TYPE is set dynamically: when LDAP_ENABLED=true → AUTH_LDAP,
-  # otherwise → AUTH_DB (default Superset behavior).
+  # AUTH_TYPE is set at Helm render time from tdp-superset.ldap.enabled
+  # (mirrors tdp-airflow.ldap.apiServerConfig's own pattern) — otherwise
+  # AUTH_DB (default Superset behavior).
   # To enable LDAP, layer values-tdp-ldap.yaml on top of this file:
   #   helm upgrade ... -f values.yaml -f values-tdp-ldap.yaml
   configOverrides:
     ldap_config: |
+      {{- if .Values.ldap.enabled }}
+      from flask_appbuilder.security.manager import AUTH_LDAP
+      AUTH_TYPE = AUTH_LDAP
+
+      # Server
+      AUTH_LDAP_SERVER = {{ .Values.ldap.server.url | quote }}
+      AUTH_LDAP_USE_TLS = {{ .Values.ldap.server.useTls }}
+      AUTH_LDAP_TLS_CACERTFILE = env('AUTH_LDAP_TLS_CACERTFILE', '/etc/ssl/certs/ca-certificates.crt')
+
+      # Bind user for LDAP searches (OpenLDAP / FreeIPA)
+      AUTH_LDAP_BIND_USER = {{ .Values.ldap.bind.user | quote }}
+      AUTH_LDAP_BIND_PASSWORD = env('AUTH_LDAP_BIND_PASSWORD', '')
+
+      # User search
+      AUTH_LDAP_SEARCH = {{ .Values.ldap.search.base | quote }}
+      AUTH_LDAP_SEARCH_FILTER = {{ .Values.ldap.search.filter | quote }}
+      AUTH_LDAP_UID_FIELD = {{ .Values.ldap.search.uidField | quote }}
+
+      # User attribute mapping
+      AUTH_LDAP_FIRSTNAME_FIELD = {{ .Values.ldap.userAttributes.firstname | quote }}
+      AUTH_LDAP_LASTNAME_FIELD  = {{ .Values.ldap.userAttributes.lastname | quote }}
+      AUTH_LDAP_EMAIL_FIELD     = {{ .Values.ldap.userAttributes.email | quote }}
+
+      # Auto-register LDAP users in Superset
+      AUTH_USER_REGISTRATION      = {{ .Values.ldap.registration.enabled }}
+      AUTH_USER_REGISTRATION_ROLE = {{ .Values.ldap.registration.defaultRole | quote }}
+
+      # Role mapping – LDAP group DN → list of Superset roles
+      AUTH_ROLES_MAPPING = {{ .Values.ldap.roleMapping | toJson }}
+
+      AUTH_LDAP_GROUP_FIELD = {{ .Values.ldap.groupField | quote }}
+      AUTH_ROLES_SYNC_AT_LOGIN = {{ .Values.ldap.roleSyncAtLogin }}
+
+      # Session lifetime (seconds)
       import os as _os
-      _ldap_enabled = _os.environ.get('LDAP_ENABLED', 'false').lower() == 'true'
-      if _ldap_enabled:
-          from flask_appbuilder.security.manager import AUTH_LDAP
-          AUTH_TYPE = AUTH_LDAP
-
-          # Server
-          AUTH_LDAP_SERVER = env('AUTH_LDAP_SERVER', 'ldap://localhost:389')
-          AUTH_LDAP_USE_TLS = env('AUTH_LDAP_USE_TLS', 'False') == 'True'
-
-          # Bind user for LDAP searches (OpenLDAP / FreeIPA)
-          AUTH_LDAP_BIND_USER = env('AUTH_LDAP_BIND_USER', '')
-          AUTH_LDAP_BIND_PASSWORD = env('AUTH_LDAP_BIND_PASSWORD', '')
-
-          # User search
-          AUTH_LDAP_SEARCH = env('AUTH_LDAP_SEARCH', '')
-          AUTH_LDAP_SEARCH_FILTER = env('AUTH_LDAP_SEARCH_FILTER', '(objectClass=person)')
-          AUTH_LDAP_UID_FIELD = env('AUTH_LDAP_UID_FIELD', 'uid')
-
-          # User attribute mapping
-          AUTH_LDAP_FIRSTNAME_FIELD = env('AUTH_LDAP_FIRSTNAME_FIELD', 'givenName')
-          AUTH_LDAP_LASTNAME_FIELD  = env('AUTH_LDAP_LASTNAME_FIELD', 'sn')
-          AUTH_LDAP_EMAIL_FIELD     = env('AUTH_LDAP_EMAIL_FIELD', 'mail')
-
-          # Auto-register LDAP users in Superset
-          AUTH_USER_REGISTRATION      = env('AUTH_USER_REGISTRATION', 'True') == 'True'
-          AUTH_USER_REGISTRATION_ROLE = env('AUTH_USER_REGISTRATION_ROLE', 'Public')
-
-          # Role mapping – LDAP group DN → list of Superset roles
-          import json as _json
-          _roles_raw = env('AUTH_ROLES_MAPPING', '{}')
-          AUTH_ROLES_MAPPING = _json.loads(_roles_raw) if _roles_raw else {}
-
-          AUTH_LDAP_GROUP_FIELD = env('AUTH_LDAP_GROUP_FIELD', 'memberOf')
-          AUTH_ROLES_SYNC_AT_LOGIN = env('AUTH_ROLES_SYNC_AT_LOGIN', 'True') == 'True'
-
-          # Session lifetime (seconds)
-          PERMANENT_SESSION_LIFETIME = int(env('PERMANENT_SESSION_LIFETIME', '1800'))
+      PERMANENT_SESSION_LIFETIME = int(_os.environ.get('PERMANENT_SESSION_LIFETIME', '1800'))
+      {{- end }}
 
   # Init job configuration (database migrations)
   init:

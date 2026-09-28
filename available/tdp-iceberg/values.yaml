@@ -38,7 +38,7 @@ spark:
   image:
     registry: registry.tecnisys.com.br
     repository: tdp-dev/images/spark
-    tag: 4.0.2-1
+    tag: 4.0.2-2
     pullPolicy: IfNotPresent
   master:
     podLabels:
@@ -60,7 +60,7 @@ maintenance:
     # NOTE: This is independent from `spark.image.*` (Spark subchart).
     image:
       repository: "registry.tecnisys.com.br/tdp/images/spark"
-      tag: "4.0.2-1"
+      tag: "4.0.2-2"
       pullPolicy: IfNotPresent
 
     # Resource allocation for maintenance jobs

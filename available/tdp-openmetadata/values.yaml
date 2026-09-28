@@ -60,7 +60,13 @@ tdp-openmetadata:
       # Cluster name
       clusterName: "tdp-openmetadata"
 
-      # Database configuration
+      # Database configuration. This is the single source of truth the
+      # OpenMetadata server actually connects with — it is independent of
+      # externalServices.postgresql below (that section only bootstraps a
+      # PostgreSQL database/user, it never edits this block). To switch to
+      # PostgreSQL, this block, openmetadata-dependencies.mysql.enabled, and
+      # externalServices.postgresql must all be changed together — see
+      # values-tdp-postgresql-dev.yaml for a working example.
       database:
         enabled: true
         host: "tdp-openmetadata-mysql"
@@ -242,7 +248,12 @@ tdp-openmetadata:
 
   # Runs before run-db-migrations.
   # - Embedded MySQL mode (default): waits until mysql:3306 is reachable.
-  # - External DB mode: skips automatically when service "mysql" is absent.
+  # - External DB mode: skips automatically once the "tdp-openmetadata-mysql"
+  #   Service is actually gone — i.e. once openmetadata-dependencies.mysql.enabled
+  #   is set to false (see values-tdp-postgresql-dev.yaml). Setting only
+  #   externalServices.postgresql.enabled does NOT remove that Service, so
+  #   this init container keeps waiting for (and finding) the still-running
+  #   MySQL regardless.
   preMigrateInitContainers:
     - name: wait-for-embedded-mysql
       image: "registry.tecnisys.com.br/community/images/openmetadata/server:1.12.4"
@@ -371,17 +382,30 @@ openmetadata-dependencies:
       tecnisys.com/product: tdp-openmetadata
 
 # External services configuration
-# Use this section to reference external PostgreSQL instances
-# When enabled, MySQL is automatically disabled and the database config is
-# switched to PostgreSQL (driver, scheme, secrets).
+# Use this section to reference external PostgreSQL instances.
+#
+# IMPORTANT: this toggle ONLY drives bootstrap (this section's own Job/RBAC/
+# Secret templates below). It does NOT disable the bundled MySQL and does NOT
+# repoint the OpenMetadata server at PostgreSQL — those live in two entirely
+# separate blocks (openmetadata-dependencies.mysql.enabled and
+# tdp-openmetadata.openmetadata.config.database.* above), which this key
+# cannot reach: Helm values.yaml is static data, not a template, so one flag
+# here can't conditionally rewrite unrelated blocks at render time (doing
+# that would require editing the vendored openmetadata/openmetadata-dependencies
+# chart templates, which are real upstream code — see
+# stack/charts/upstream/openmetadata/DEVNOTES.md's re-vendor flow). Setting
+# only this flag creates a PostgreSQL database/user that the app never uses,
+# while MySQL keeps running — db-create-job.yaml fails the render if you do
+# this. Use values-tdp-postgresql-dev.yaml, which sets all three pieces
+# together, as the working example.
 externalServices:
   postgresql:
-    # Toggle: set to true to use an external PostgreSQL instead of the bundled MySQL.
-    # When true the chart will:
-    #   - disable the MySQL subchart (openmetadata-dependencies.mysql)
-    #   - auto-generate a Kubernetes Secret with a random password for the
-    #     OpenMetadata database user
-    #   - run a pre-install/pre-upgrade Job that creates the database and user
+    # Toggle: creates a PostgreSQL database + user (this section's Job/RBAC/
+    # Secret only). See the IMPORTANT note above — pair this with
+    # openmetadata-dependencies.mysql.enabled=false and
+    # tdp-openmetadata.openmetadata.config.database.* (or use
+    # values-tdp-postgresql-dev.yaml directly) to actually switch the app to
+    # PostgreSQL.
     enabled: false
 
     # Release name of the PostgreSQL chart (if deployed via Helm in the same cluster)

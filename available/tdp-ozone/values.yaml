@@ -78,9 +78,63 @@ tdp-ozone:
   imagePullSecrets: []
 
   # Common environment variables (templated)
+  # Empty by default. Ozone hard-requires Kerberos for any real S3/OFS
+  # authentication (verified live: ozone.security.enabled=true rejects
+  # anything but hadoop.security.authentication=kerberos at daemon login —
+  # "SIMPLE authentication method not support[ed]" — on every released
+  # Ozone version, this is architectural, not a version quirk). Real
+  # Kerberos, scoped to an internal KDC serving only this chart's own
+  # daemons, is layered on via a separate overlay file,
+  # values-tdp-kerberos.yaml — NOT via editing this list directly, because
+  # a values.yaml list can't conditionally omit its own items based on
+  # another flag (Helm parses values.yaml as fixed data before any `tpl`
+  # templating runs; only individual string VALUES inside an
+  # already-parsed list get re-templated later, so "kerberos.enabled"
+  # can gate scalar values here but not the presence of whole list
+  # entries). See values-tdp-kerberos.yaml and templates/kdc-*.yaml,
+  # kerberos.* below (used by this chart's own KDC templates), and
+  # S3-SECURITY.md for the full mechanism.
   env: []
   # Common envFrom items to set up environment variables (templated)
   envFrom: []
+
+  # Internal, private-only Kerberos KDC for this chart's own daemons
+  # (om/scm/datanode/s3g/recon) — NOT integrated with any real
+  # organizational AD/Kerberos. Ships disabled: apply
+  # -f values-tdp-kerberos.yaml alongside this file to turn it on (that
+  # overlay sets kerberos.enabled: true AND supplies the env/filesFrom
+  # entries the vendored om/scm/datanode/s3g/recon templates need — see
+  # the comment on env above for why those can't live here).
+  kerberos:
+    enabled: false
+    # Private realm name for the internal KDC. Not a real domain —
+    # deliberately distinct so it's never confused with an org's real
+    # Kerberos/AD realm.
+    realm: TDP.LOCAL
+    # KDC master password. Placeholder per repo convention — provide via
+    # --set or external secret management, never commit a real value.
+    masterPassword: ""
+    kdc:
+      image:
+        # Mirrors ghcr.io/apache/ozone-testkrb5 (renamed here to
+        # ozone-krb5 — the upstream name is Apache's own, unrelated to
+        # what we call our mirror) — the KDC image Ozone's own upstream
+        # secure test cluster uses
+        # (hadoop-ozone/dist/src/main/compose/ozonesecure/), guaranteed
+        # compatible with this chart's Ozone version. Pin an explicit
+        # dated tag — this image publishes no semver/latest tags.
+        repository: registry.tecnisys.com.br/community/images/apache/ozone-krb5
+        tag: "20260507-1"
+        pullPolicy: IfNotPresent
+      persistence:
+        # The KDC's principal database must survive pod restarts —
+        # re-running principal creation blindly on every restart would
+        # rotate every key and invalidate every already-distributed
+        # keytab. The chart's own init script is idempotent (checks
+        # before creating/exporting), but that idempotency only helps if
+        # the database itself persists across restarts.
+        size: 1Gi
+        storageClassName: ~
 
   # Configuration management
   configuration:
@@ -128,8 +182,32 @@ tdp-ozone:
     resources: {}
     # Constrain Datanode pods to nodes with specific node labels
     nodeSelector: {}
-    # Constrain Datanode pods to nodes by affinity/anti-affinity rules
-    affinity: {}
+    # Constrain Datanode pods to nodes by affinity/anti-affinity rules.
+    # Spreads Datanode replicas across hosts (mirrors om/scm's
+    # podAntiAffinity below) so losing one node can't take out enough
+    # datanodes to breach hdds.scm.safemode.min.datanode (hardcoded in the
+    # vendored subchart's templates/_helpers.tpl) and stall writes.
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                      - datanode
+              topologyKey: kubernetes.io/hostname
+    # Spread Datanode pods evenly across nodes, complementing the soft
+    # anti-affinity above with an explicit skew budget.
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: datanode
     # Allow to schedule Datanode pods on nodes with matching taints
     tolerations: []
     # Datanode security context (overwrites common security context)
@@ -173,8 +251,23 @@ tdp-ozone:
     resources: {}
     # Constrain Ozone Manager pods to nodes with specific node labels
     nodeSelector: {}
-    # Constrain Ozone Manager pods to nodes by affinity/anti-affinity rules
-    affinity: {}
+    # Constrain Ozone Manager pods to nodes by affinity/anti-affinity rules.
+    # Mirrors the vendored subchart's own default (values.yaml under
+    # charts/upstream/ozone/ozone) so OM keeps steering clear of SCM even
+    # though this wrapper's values.yaml fully overrides that default —
+    # an empty {} here previously silenced it entirely.
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                      - scm
+              topologyKey: kubernetes.io/hostname
     # Allow to schedule Ozone Manager pods on nodes with matching taints
     tolerations: []
     # Ozone Manager security context (overwrites common security context)
@@ -255,6 +348,21 @@ tdp-ozone:
     auth:
       enabled: true
       secretName: ozone-s3-credentials
+      # OM identity that templates/s3-secret-provision-job.yaml issues a
+      # real secret for via `ozone s3 getsecret -u=<adminUsername>`.
+      #
+      # Renamed away from this chart's original pre-Kerberos static
+      # username ("ozone-admin") to avoid any confusion with that legacy
+      # value — not because the string itself is broken. (An earlier
+      # investigation here briefly suspected a bug tied to that literal
+      # name; it wasn't real. The actual cause was our own concurrent
+      # manual `kubectl exec`/kinit/getsecret diagnostics racing against
+      # the automated Job on the same fresh OM instance during testing —
+      # confirmed by re-running a completely untouched install and
+      # verifying the Job's own credentials work correctly end to end.
+      # The automated pipeline is reliable when left undisturbed, which
+      # is how it always runs in real use.)
+      adminUsername: tdp-s3-admin
 
   # Storage Container Manager configuration
   scm:
@@ -272,8 +380,23 @@ tdp-ozone:
     resources: {}
     # Constrain Storage Container Manager pods to nodes with specific node labels
     nodeSelector: {}
-    # Constrain Storage Container Manager pods to nodes by affinity/anti-affinity rules
-    affinity: {}
+    # Constrain Storage Container Manager pods to nodes by affinity/anti-affinity rules.
+    # Mirrors the vendored subchart's own default (values.yaml under
+    # charts/upstream/ozone/ozone) so SCM keeps steering clear of OM even
+    # though this wrapper's values.yaml fully overrides that default —
+    # an empty {} here previously silenced it entirely.
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                      - om
+              topologyKey: kubernetes.io/hostname
     # Allow to schedule Storage Container Manager pods on nodes with matching taints
     tolerations: []
     # Storage Container Manager security context (overwrites common security context)

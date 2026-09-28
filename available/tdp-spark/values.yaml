@@ -109,6 +109,12 @@ tdp-spark:
       # Set Hadoop user to prevent null user errors
       spark.hadoop.hadoop.user.name spark
       spark.hadoop.hadoop.user.group spark
+      # Executor/driver sizing defaults
+      spark.executor.instances 2
+      spark.executor.cores 2
+      spark.executor.memory 4g
+      spark.driver.memory 2g
+      spark.driver.cores 1
       # S3 Configuration
       # spark.hadoop.fs.s3a.endpoint <s3a-endpoint>
       # spark.hadoop.fs.s3a.access.key <s3a-access-key>
@@ -117,13 +123,13 @@ tdp-spark:
       # spark.hadoop.fs.s3a.impl org.apache.hadoop.fs.s3a.S3AFileSystem
       # spark.hadoop.fs.s3a.connection.ssl.enabled false
       # spark.hadoop.fs.s3a.region us-east-1
-      # S3 Performance tuning
-      # spark.hadoop.fs.s3a.connection.maximum 100
-      # spark.hadoop.fs.s3a.threads.max 64
-      # spark.hadoop.fs.s3a.fast.upload true
-      # spark.hadoop.fs.s3a.block.size 128M
-      # spark.hadoop.fs.s3a.multipart.size 104857600
-      # Set default filesystem to S3
+      # S3 Performance tuning (generic constants, safe without S3 credentials configured)
+      spark.hadoop.fs.s3a.connection.maximum 100
+      spark.hadoop.fs.s3a.threads.max 64
+      spark.hadoop.fs.s3a.fast.upload true
+      spark.hadoop.fs.s3a.block.size 128M
+      spark.hadoop.fs.s3a.multipart.size 104857600
+      # Set default filesystem to S3 (requires spark.hadoop.fs.s3a.endpoint above to be set first)
       # spark.hadoop.fs.defaultFS s3a://warehouse
 
   # Optional library dependencies (example used by some integration scenarios)
@@ -148,16 +154,33 @@ tdp-spark:
       optimize:
         zOrderEnabled: false
 
+  # Single source of truth for the Iceberg/Hive-Metastore/S3 warehouse
+  # connection: templates/custom-spark-configmap.yaml renders these into
+  # spark-defaults.conf (Java/Spark/Iceberg) and
+  # templates/warehouse-env-configmap.yaml renders the equivalent env vars
+  # for Python libraries (PyIceberg/DuckDB/boto3) sharing the same pods —
+  # see spark.master/worker.extraEnvVarsCM below. Edit only here; do not
+  # hand-duplicate these values elsewhere.
   iceberg:
     enabled: false
     catalog:
+      name: "iceberg"
       type: "hive"
       uri: "thrift://tdp-hive-metastore.tdp-project.svc.cluster.local:9083"
       warehouse: "s3a://warehouse/hive"
+      defaultNamespace: "default"
     storage:
       type: "s3"
       endpoint: "<s3-endpoint>"
+      region: "us-east-1"
       pathStyleAccess: true
+    # Pre-created Secret with AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+    # Consumed by both the JVM side (Hadoop's EnvironmentVariableCredentialsProvider
+    # and Iceberg S3FileIO's default AWS credential chain both read these same
+    # env vars — no explicit key/secret is written into spark-defaults.conf)
+    # and Python (PyIceberg/DuckDB/boto3), via spark.master/worker.extraEnvVarsSecret
+    # below — that field's value must match this name.
+    credentialsSecret: "<credentials-secret-name>"
     maintenance:
       enabled: false
       schedule: "0 2 * * *"
@@ -185,7 +208,7 @@ spark:
   image:
     registry: registry.tecnisys.com.br
     repository: tdp-dev/images/spark
-    tag: 4.0.2-1
+    tag: 4.0.2-2
     pullPolicy: IfNotPresent
     pullSecrets:
       - tdp-registry
@@ -221,18 +244,35 @@ spark:
         value: /opt/bitnami/common/lib/libnss_wrapper.so
       - name: SPARK_LOCAL_DIRS
         value: /tmp/spark-local
+    # NOTE: the vendored chart's own `existingConfigmap` mounts the whole
+    # ConfigMap at /bitnami/spark/conf/ — but the Bitnami Spark image's
+    # entrypoint.sh/setup.sh never read from that path (only
+    # /opt/bitnami/spark/conf, i.e. $SPARK_CONF_DIR — verified against the
+    # actual published image's scripts and live in a disposable pod: a file
+    # mounted at /bitnami/spark/conf/spark-defaults.conf is silently
+    # ignored). Mounting spark-defaults.conf as a subPath directly onto
+    # $SPARK_CONF_DIR/spark-defaults.conf below is what libspark.sh's own
+    # `if [[ ! -f "$SPARK_CONF_FILE" ]]` check honors — confirmed live this
+    # is what actually makes tdp-spark.customSparkConfig (and by extension
+    # the Iceberg spark-defaults.conf block above) reach Spark.
     extraVolumeMounts:
       - name: hadoop-config
         mountPath: /opt/bitnami/spark/hadoop-conf
         readOnly: true
       - name: spark-artifacts
         mountPath: /opt/bitnami/spark/artifacts
+      - name: custom-spark-defaults
+        mountPath: /opt/bitnami/spark/conf/spark-defaults.conf
+        subPath: spark-defaults.conf
     extraVolumes:
       - name: hadoop-config
         configMap:
           name: tdp-spark-hadoop-config
       - name: spark-artifacts
         emptyDir: {}
+      - name: custom-spark-defaults
+        configMap:
+          name: spark-custom-defaults
 
     securityContext:
       runAsUser: 1001
@@ -242,13 +282,10 @@ spark:
     containerSecurityContext:
       readOnlyRootFilesystem: false
 
-    existingConfigmap: "spark-custom-defaults"
-
     initContainers: []
 
   # Worker nodes configuration
   worker:
-    existingConfigmap: "spark-custom-defaults"
     configOptions: "-Dspark.ui.reverseProxy=true"
     replicaCount: 2
     networkPolicy:
@@ -284,12 +321,18 @@ spark:
         readOnly: true
       - name: spark-artifacts
         mountPath: /opt/bitnami/spark/artifacts
+      - name: custom-spark-defaults
+        mountPath: /opt/bitnami/spark/conf/spark-defaults.conf
+        subPath: spark-defaults.conf
     extraVolumes:
       - name: hadoop-config
         configMap:
           name: tdp-spark-hadoop-config
       - name: spark-artifacts
         emptyDir: {}
+      - name: custom-spark-defaults
+        configMap:
+          name: spark-custom-defaults
     # Horizontal Pod Autoscaler configuration for worker nodes
     # When enabled, worker pods will scale automatically based on CPU/memory utilization
     autoscaling:
@@ -309,59 +352,6 @@ spark:
       limits:
         cpu: 1
         memory: 2Gi
-
-  # Essential Spark configurations that differ from defaults
-  sparkConf:
-    # Executor settings
-    "spark.executor.instances": "2"
-    "spark.executor.cores": "2"
-    "spark.executor.memory": "4g"
-
-    # Driver settings
-    "spark.driver.memory": "2g"
-    "spark.driver.cores": "1"
-
-    # Event log settings
-    "spark.eventLog.enabled": "true"
-    "spark.eventLog.dir": "file:///tmp/spark-events"
-    "spark.history.fs.logDirectory": "file:///tmp/spark-events"
-    "spark.ui.reverseProxy": "true"
-    # spark.ui.reverseProxyUrl: "http://spark.tdp.local"  # Set when using Ingress or Gateway API
-    
-    # Ivy repository
-    "spark.jars.ivy": "/tmp/.ivy2"
-    
-    # Hadoop Security - Disable Kerberos (CRITICAL for simple auth)
-    "spark.hadoop.security.authentication": "simple"
-    "spark.hadoop.security.authorization": "false"
-    "spark.hadoop.hadoop.security.authentication": "simple"
-    "spark.hadoop.hadoop.security.authorization": "false"
-    
-    # Disable ViewFS to avoid Kerberos dependency
-    "spark.hadoop.fs.viewfs.enabled": "false"
-    
-    # Set Hadoop user to prevent null user errors
-    "spark.hadoop.hadoop.user.name": "spark"
-    "spark.hadoop.hadoop.user.group": "spark"
-    
-    # S3A Configuration
-    # "spark.hadoop.fs.s3a.endpoint": "<s3a-endpoint>"
-    # "spark.hadoop.fs.s3a.access.key": "<s3a-access-key>"
-    # "spark.hadoop.fs.s3a.secret.key": "<s3a-secret-key>"
-    # "spark.hadoop.fs.s3a.path.style.access": "true"
-    # "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
-    # "spark.hadoop.fs.s3a.connection.ssl.enabled": "false"
-    # "spark.hadoop.fs.s3a.region": "us-east-1"
-    
-    # S3 Performance tuning
-    "spark.hadoop.fs.s3a.connection.maximum": "100"
-    "spark.hadoop.fs.s3a.threads.max": "64"
-    "spark.hadoop.fs.s3a.fast.upload": "true"
-    "spark.hadoop.fs.s3a.block.size": "128M"
-    "spark.hadoop.fs.s3a.multipart.size": "104857600"
-    
-    # Set default filesystem to S3
-    "spark.hadoop.fs.defaultFS": "s3a://warehouse"
 
   # Environment variables for Spark
   environment:

@@ -109,7 +109,7 @@ tdp-jupyter:
         password: tdp-password  # Change for production!
       KubeSpawner:
         # Default image with Spark pre-installed
-        image_spec: "registry.tecnisys.com.br/tdp/images/jupyter/jupyter:4.5.6-1"
+        image_spec: "registry.tecnisys.com.br/tdp/images/jupyter/jupyter:4.5.6-2"
       Spawner:
         debug: false  # Enable for debugging
         http_timeout: 30 # Increase timeout from default 30s to 60s for notebook startup
@@ -311,7 +311,7 @@ tdp-jupyter:
     # Container image configuration
     image:
       name: registry.tecnisys.com.br/tdp/images/jupyter
-      tag: 4.5.6-1
+      tag: 4.5.6-2
       pullPolicy: IfNotPresent  # Use Always for updates
     # Cloud metadata security
     cloudMetadata:

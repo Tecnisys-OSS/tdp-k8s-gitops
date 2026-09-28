@@ -32,3 +32,12 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+
+  # tdp-license-operator scales licensed Deployments to zero on license expiry;
+  # do not let self-heal revert it.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

@@ -89,7 +89,12 @@ tdp-airflow:
       digest: ~
       pullPolicy: IfNotPresent
     useDefaultImageForMigration: false
-    migrationsWaitTimeout: 60
+    # 5 components (scheduler, worker, api-server, triggerer, dag-processor) run
+    # `airflow db check-migrations --migration-wait-timeout=<this>` as an init
+    # container in parallel against the same shared PostgreSQL. The previous
+    # 60s default budget was insufficient under concurrent checks from all 5;
+    # 300s was validated as sufficient by client audit.
+    migrationsWaitTimeout: 300
 
   # Database migration job settings
   migrateDatabaseJob:
@@ -145,6 +150,11 @@ tdp-airflow:
       AUTH_LDAP_SERVER = "ldap://<LDAP_HOST>:389"
       # Set to True when using LDAPS and providing the CA bundle.
       AUTH_LDAP_USE_TLS = False
+      # CA bundle for LDAPS/STARTTLS. Without this, enabling AUTH_LDAP_USE_TLS
+      # fails the TLS handshake (SERVER_DOWN) even though the bundle already
+      # ships in the image. Override via LDAP_TLS_CACERTFILE if a different
+      # (e.g. internal) CA is needed.
+      AUTH_LDAP_TLS_CACERTFILE = os.environ.get("LDAP_TLS_CACERTFILE", "/etc/ssl/certs/ca-certificates.crt")
       # Bind DN used to search users.
       AUTH_LDAP_BIND_USER = "uid=<BIND_USER>,cn=users,cn=accounts,dc=example,dc=com"
       AUTH_LDAP_BIND_PASSWORD = os.environ.get("LDAP_BIND_PASSWORD", "")

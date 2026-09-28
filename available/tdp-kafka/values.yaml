@@ -73,6 +73,13 @@
 # anywhere else in the cluster.
 strimzi-kafka-operator:
   enabled: false
+  # Only takes effect when enabled above. Lands on the Strimzi
+  # cluster-operator Deployment's own metadata.labels (verified via
+  # `helm template`) via a patch to the vendored chart — see the licensing
+  # note near the top of this file.
+  commonLabels:
+    tecnisys.com/licensed: "true"
+    tecnisys.com/product: tdp-kafka
 
 name: tdp-kafka
 kafkaVersion: 4.1.0
@@ -169,6 +176,33 @@ nodePool:
         kraftMetadata: shared
         storageClass: null  # null = use the cluster default StorageClass (recommended)
 
+  # Scheduling for the broker/controller pods, rendered into
+  # KafkaNodePool.spec.template.pod (which takes precedence over the Kafka
+  # CR's pod template). Rendered with tpl, so values may reference
+  # {{ .Values.name }}. Strimzi's pod template has no nodeSelector: use
+  # nodeAffinity in `affinity` to pin brokers to dedicated nodes.
+  #
+  # Default: spread brokers evenly across nodes (at most 1 of difference
+  # between any two nodes, e.g. 4 brokers on 3 nodes -> 2/1/1). Kafka places
+  # partition replicas per broker, not per node, so without this several
+  # brokers - and every replica of a partition - can share one node.
+  # ScheduleAnyway never leaves a broker Pending on small clusters. The
+  # selector matches the same labels as Strimzi's own broker PDB. Set to []
+  # to disable. With node-local storage (e.g. local-path), existing brokers
+  # stay on the node that holds their volume: this only affects placement
+  # of new brokers/volumes.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          strimzi.io/cluster: "{{ .Values.name }}"
+          strimzi.io/kind: Kafka
+          strimzi.io/name: "{{ .Values.name }}-kafka"
+  affinity: {}
+  tolerations: []
+
 # Broker liveness/readiness probes, applied to spec.kafka of the Kafka CR.
 #
 # These are deliberately much more permissive than Strimzi's defaults
@@ -211,14 +245,6 @@ extraLabels:
 tdp-kafka:
   enabled: true
 
-
-strimzi-kafka-operator:
-  # Lands on the Strimzi cluster-operator Deployment's own metadata.labels
-  # (verified via `helm template`) via a patch to the vendored chart — see
-  # the licensing note near the top of this file.
-  commonLabels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-kafka
 
 kafka-ui:
   name: kafka-ui
