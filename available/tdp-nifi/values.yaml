@@ -116,7 +116,7 @@ nifiCluster:
     authorization:
       mode: "file"  # file or ranger
       ranger:
-        # Absolute paths: confirmed live (exec into the tdp-dev/images/nifi
+        # Absolute paths: confirmed live (exec into the tdp/images/nifi
         # image) that "../nifi/conf/..." (Ranger's generic example default,
         # assuming an HDP-style layout with a sibling "nifi" directory)
         # resolves to NOTHING in this image - NiFi is installed entirely

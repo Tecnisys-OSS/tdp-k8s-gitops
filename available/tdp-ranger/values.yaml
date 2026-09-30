@@ -102,7 +102,8 @@ tdp-ranger:
     enabled: false
     image:
       repository: "registry.tecnisys.com.br/tdp/images/ranger-usersync"
-      tag: "2.7.0"
+      # 2.7.0-0 is the published tag (2.7.0 was never pushed, in /tdp-dev or /tdp).
+      tag: "2.7.0-0"
       pullPolicy: IfNotPresent
     syncSource: "unix"
     syncInterval: 360
@@ -275,8 +276,14 @@ rangerIntegrations:
     enabled: false
     image: "registry.tecnisys.com.br/community/images/python:3.11-slim"
     imagePullPolicy: IfNotPresent
-    rangerReadyTimeout: 600
+    # How long the Job waits for the Ranger API (init container and main
+    # container share this budget). Matches the Ranger startupProbe budget:
+    # the first start imports the DB schema and was measured at ~960s.
+    rangerReadyTimeout: 1800
     retryInterval: 10
+    # Hard limit for the whole Job. Empty = rangerReadyTimeout + 600s left
+    # for configuring services and policies once Ranger answers.
+    activeDeadlineSeconds: ""
 
   # Integrations are disabled by default
   kafka:

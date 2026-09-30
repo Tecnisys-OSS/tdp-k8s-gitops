@@ -206,8 +206,12 @@ spark:
     name: "tdp-spark-sa"
 
   image:
-    registry: registry.tecnisys.com.br
-    repository: tdp-dev/images/spark
+    # Host and project in one string on purpose: the release pipeline rewrites
+    # registry.tecnisys.com.br/tdp-dev/... to registry.tecnisys.com.br/tdp/...
+    # only when both appear together (a split registry:/repository: kept
+    # "tdp-dev" in production refs). Empty registry = no prefix.
+    registry: ""
+    repository: registry.tecnisys.com.br/tdp/images/spark
     tag: 4.0.2-2
     pullPolicy: IfNotPresent
     pullSecrets:

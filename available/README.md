@@ -10,7 +10,7 @@ This repository drives the deployment of TDP (Tecnisys Data Platform) components
 
 All applications follow the same pattern:
 
-- **External Helm Chart**: Pulled from `registry.engtecnisys.com.br/tdp/charts`
+- **External Helm Chart**: Pulled from `registry.tecnisys.com.br/tdp/charts`
 - **Local Values**: Managed in Git at `available/<app-name>/values.yaml`
 - **Auto-sync**: Changes to values.yaml are automatically applied
 
