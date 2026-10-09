@@ -1,0 +1,176 @@
+# Ozone security overlay: Kerberos (Ozone's internal KDC) plus real S3
+# authentication on the S3 Gateway. Layered by ArgoCD last, after
+# values-integration.yaml. deploy.sh renders it only with
+# TDP_OZONE_SECURITY=true (enable-ozone-security.sh); otherwise the file does
+# not exist and the Application skips it.
+#
+# Everything under tdp-ozone below, except kerberos.masterPassword and
+# s3g.auth, mirrors the chart's values-tdp-kerberos.yaml: lists replace the
+# ones in values.yaml as a whole, so they must match the chart version in
+# HELM_CHART_VERSION (tests/gitops/ozone-security/test.sh compares them).
+#
+# With S3 auth on, tdp-ozone's PostSync Job fills the Secret
+# "ozone-s3-credentials" (aws_access_key_id/aws_secret_access_key) with one
+# OM-issued key for the Ozone admin "tdp-s3-admin". The other components' own
+# values-ozone-security.yaml read it from there. The web UIs (OM, SCM, Recon,
+# S3 Gateway) stay unauthenticated: the overlay keeps HTTP Kerberos off.
+
+tdp-ozone:
+  kerberos:
+    enabled: true
+    # KDC master password (TDP_OZONE_KDC_MASTER_PASSWORD), used once to create
+    # the KDC database. Empty in variables.env: deploy.sh keeps the one
+    # already rendered here, or generates one.
+    masterPassword: '${TDP_OZONE_KDC_MASTER_PASSWORD}'
+
+  # Common environment variables — reach every daemon (om/scm/datanode/s3g/
+  # recon) via each one's own `concat .Values.env .Values.<component>.env`.
+  env:
+    - name: OZONE-SITE.XML_ozone.security.enabled
+      value: "true"
+    - name: CORE-SITE.XML_hadoop.security.authentication
+      value: "kerberos"
+    # Explicitly OFF, not just omitted — verified live that
+    # ozone.security.enabled=true alone makes om/scm/s3g's web UI start
+    # requiring SPNEGO by default (statuscode 401 on every probe), even
+    # with no *.http.auth.* properties set at all. That breaks their
+    # LIVENESS PROBES: the vendored chart's om/scm/s3g StatefulSets
+    # hardcode a plain httpGet probe on the UI port with no values-driven
+    # override to switch it to tcpSocket, so kubelet's unauthenticated
+    # probe request gets 401'd and kills the pod in an endless restart
+    # loop. Our actual vulnerability (fabricated S3 credentials /
+    # fabricated OFS identities) lives entirely at the RPC layer, which
+    # the principal/keytab settings below already fully secure — the web
+    # UI was never part of what we're fixing here.
+    - name: OZONE-SITE.XML_ozone.security.http.kerberos.enabled
+      value: "false"
+    - name: KRB5_CONFIG
+      value: "{{ .Values.configuration.dir }}/krb5.conf"
+    # KRB5_CONFIG alone is NOT enough: verified live that this image's JVM
+    # ignores it and falls back to its own baked-in /etc/krb5.conf stub
+    # (default_realm=EXAMPLE.COM), which has no [realms] entry for our
+    # realm, so Java falls through to a DNS SRV lookup that fails
+    # ("Unable to locate KDC for realm ...") — even though the native MIT
+    # `kinit` binary DOES correctly honor KRB5_CONFIG. The system property
+    # below is what the JVM actually reads (confirmed via
+    # -Dsun.security.krb5.debug=true), and takes precedence over both
+    # KRB5_CONFIG and the built-in stub. OZONE_OPTS (not HADOOP_OPTS,
+    # which this image's entrypoint deprecates) is the variable this
+    # image's launch wrapper forwards into the JVM's own command line.
+    - name: OZONE_OPTS
+      value: "-Djava.security.krb5.conf={{ .Values.configuration.dir }}/krb5.conf"
+    # Every principal declared here, not just in each component's own
+    # .env block — verified live that this is required, not optional:
+    # when a client (e.g. datanode/recon connecting to SCM) does SASL
+    # server-identity validation, it checks the server's principal
+    # against ITS OWN copy of that server's *.kerberos.principal config,
+    # not against anything the server itself sends. Without scm's
+    # principal also present in the datanode/recon env, they only see
+    # Ozone's built-in default expectation (a _HOST-based
+    # "SCM/<hostname>@REALM" pattern) and reject our bare scm/scm@REALM
+    # principal with "Server has invalid Kerberos principal ... Bad
+    # Kerberos server principal configuration". Keytab FILE paths stay
+    # per-component below (a component only needs to know where its own
+    # keytab is, to log in as itself) — only the principal NAMES need to
+    # be broadcast to everyone.
+    - name: OZONE-SITE.XML_ozone.om.kerberos.principal
+      value: "om/om@{{ .Values.kerberos.realm }}"
+    - name: OZONE-SITE.XML_hdds.scm.kerberos.principal
+      value: "scm/scm@{{ .Values.kerberos.realm }}"
+    - name: OZONE-SITE.XML_hdds.datanode.kerberos.principal
+      value: "dn/dn@{{ .Values.kerberos.realm }}"
+    - name: OZONE-SITE.XML_ozone.s3g.kerberos.principal
+      value: "s3g/s3g@{{ .Values.kerberos.realm }}"
+    - name: OZONE-SITE.XML_ozone.recon.kerberos.principal
+      value: "recon/recon@{{ .Values.kerberos.realm }}"
+    # Real ACL enforcement is also active now that security is genuinely
+    # on (verified live: a real, correctly-signed request from the
+    # OM-issued s3g.auth.adminUsername secret got AccessDenied trying to
+    # create a bucket, even though authentication itself succeeded — the
+    # shared s3v volume's ACLs don't grant that identity anything by
+    # default). Making it an Ozone admin is what the chart's own
+    # generate-s3-credentials.sh docs already assumed would be true.
+    - name: OZONE-SITE.XML_ozone.administrators
+      value: "{{ .Values.s3g.auth.adminUsername }}"
+
+  # Projects the KDC's krb5.conf and every keytab Secret into every
+  # daemon's own config volume (a single, global list — every pod ends up
+  # with all 5 keytabs present, not just its own; not a new trust boundary,
+  # these pods already mutually trust each other as one Ozone cluster).
+  configuration:
+    filesFrom:
+      - configMap:
+          name: '{{ .Release.Name }}-kdc-config'
+          items:
+            - key: krb5.conf
+              path: krb5.conf
+      - secret:
+          name: '{{ .Release.Name }}-om-keytab'
+          items:
+            - key: keytab
+              path: security/keytabs/om.keytab
+      - secret:
+          name: '{{ .Release.Name }}-scm-keytab'
+          items:
+            - key: keytab
+              path: security/keytabs/scm.keytab
+      - secret:
+          name: '{{ .Release.Name }}-dn-keytab'
+          items:
+            - key: keytab
+              path: security/keytabs/dn.keytab
+      - secret:
+          name: '{{ .Release.Name }}-s3g-keytab'
+          items:
+            - key: keytab
+              path: security/keytabs/s3g.keytab
+      - secret:
+          name: '{{ .Release.Name }}-recon-keytab'
+          items:
+            - key: keytab
+              path: security/keytabs/recon.keytab
+
+  om:
+    # Turning security on for an Ozone that already ran without it: the OM's
+    # storage exists, so the image's entrypoint skips `ozone om --init`
+    # (ENSURE_OM_INITIALIZED), and the OM would stop with "OzoneManager started
+    # in secure mode but doesn't have SCM signed certificate". `ozone om --init`
+    # on an initialized OM keeps its data and only asks SCM for the
+    # certificate, so run it once, while VERSION has no omCertSerialId yet.
+    args:
+      - bash
+      - -c
+      - |
+        version="${ENSURE_OM_INITIALIZED:-/data/metadata/om/current/VERSION}"
+        if [ -f "$version" ] && ! grep -q '^omCertSerialId=' "$version"; then
+          echo "OM storage was initialized without security: getting its SCM-signed certificate"
+          /opt/hadoop/bin/ozone om --init
+        fi
+        exec /opt/hadoop/bin/ozone om
+    env:
+      - name: OZONE-SITE.XML_ozone.om.kerberos.keytab.file
+        value: "{{ .Values.configuration.dir }}/security/keytabs/om.keytab"
+
+  scm:
+    env:
+      - name: OZONE-SITE.XML_hdds.scm.kerberos.keytab.file
+        value: "{{ .Values.configuration.dir }}/security/keytabs/scm.keytab"
+
+  datanode:
+    env:
+      - name: OZONE-SITE.XML_hdds.datanode.kerberos.keytab.file
+        value: "{{ .Values.configuration.dir }}/security/keytabs/dn.keytab"
+
+  s3g:
+    # Real S3 authentication (values-gitops.yaml turns it off while Kerberos is
+    # off).
+    auth:
+      enabled: true
+    env:
+      - name: OZONE-SITE.XML_ozone.s3g.kerberos.keytab.file
+        value: "{{ .Values.configuration.dir }}/security/keytabs/s3g.keytab"
+
+  recon:
+    env:
+      - name: OZONE-SITE.XML_ozone.recon.kerberos.keytab.file
+        value: "{{ .Values.configuration.dir }}/security/keytabs/recon.keytab"

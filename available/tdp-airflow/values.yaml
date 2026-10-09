@@ -97,9 +97,23 @@ tdp-airflow:
     migrationsWaitTimeout: 300
 
   # Database migration job settings
+  # The database migration and admin-user Jobs run as regular resources, not
+  # Helm hooks (the upstream default). As post-install hooks they only start
+  # after `helm install --wait` (or an ArgoCD sync) sees every Deployment
+  # ready, while those Deployments wait in wait-for-airflow-migrations for
+  # the migrations to finish, so the install deadlocks until it times out.
+  # ttlSecondsAfterFinished must outlive the install: `helm install --wait-for-jobs`
+  # (and any CI waiting on the Jobs) reports a Job that the TTL already deleted as
+  # NotFound and never succeeds, and the pods can take several minutes to start
+  # after the migration finishes.
   migrateDatabaseJob:
     enabled: true
-    ttlSecondsAfterFinished: 300
+    useHelmHooks: false
+    ttlSecondsAfterFinished: 3600
+
+  createUserJob:
+    useHelmHooks: false
+    ttlSecondsAfterFinished: 3600
 
   # Private registry pull secret used by Airflow workloads.
   registry:
@@ -241,9 +255,13 @@ tdp-airflow:
 
   # Broker URL secret — points to secret created by ensure-secrets-job (idempotent).
   # Prevents the upstream chart from generating a random broker URL on each sync.
-  # NOTE: Only brokerUrlSecretName is set here; metadataConnection is left to upstream defaults.
+  # NOTE: metadataConnection keeps the upstream defaults (user/db postgres) except
+  # pass, which must match postgresql.auth.postgresPassword (built-in PostgreSQL).
+  # Overlays for an external database set their own metadataSecretName instead.
   data:
     brokerUrlSecretName: tdp-airflow-broker-url
+    metadataConnection:
+      pass: "ChangeMe!T3c"
 
   # Airflow configuration (airflow.cfg)
   # Values are templated via Helm `tpl`.
@@ -382,6 +400,12 @@ tdp-airflow:
       storageClassName: ""
       existingClaim: ""
 
+  # Admin user created by the upstream create-user job (FAB auth manager).
+  # Only applies on first creation: changing it later does not update an existing user.
+  webserver:
+    defaultUser:
+      password: "ChangeMe!T3c"
+
   # API Server (Airflow 3.0+)
   apiServer:
     replicas: 1
@@ -434,10 +458,13 @@ tdp-airflow:
       periodSeconds: 10
       scheme: HTTP
 
+    # Airflow 3's API server needs more than the 60s the upstream window allows
+    # to import its code on a CPU-limited pod; the probe killed it in a loop
+    # (exit 143, five restarts) before it came up. 30 x 10s allows five minutes.
     startupProbe:
       initialDelaySeconds: 0
       timeoutSeconds: 20
-      failureThreshold: 6
+      failureThreshold: 30
       periodSeconds: 10
       scheme: HTTP
 
@@ -468,6 +495,8 @@ tdp-airflow:
 
   # Triggerer
   triggerer:
+    livenessProbe:
+      timeoutSeconds: 60
     resources:
       requests:
         cpu: "512m"
@@ -482,6 +511,8 @@ tdp-airflow:
 
   # DAG Processor
   dagProcessor:
+    livenessProbe:
+      timeoutSeconds: 60
     resources:
       requests:
         cpu: "512m"
@@ -533,7 +564,7 @@ tdp-airflow:
         tecnisys.io/cluster: tdp
     auth:
       enablePostgresUser: true
-      postgresPassword: postgres
+      postgresPassword: "ChangeMe!T3c"
       username: ""
       password: ""
     image:
@@ -590,7 +621,7 @@ gatewayApi:
   airflow:
     enabled: true
     hostnames:
-      - airflow.tdp.local
+      - airflow.${TDP_DOMAIN}
     rules:
       - matches:
           - path:
@@ -608,8 +639,27 @@ ingress:
   ingressClassName: ""
   annotations: {}
   hosts:
-    - host: airflow.tdp.local
+    - host: airflow.${TDP_DOMAIN}
       paths:
         - path: /
           pathType: Prefix
   tls: []
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

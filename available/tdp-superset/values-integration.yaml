@@ -1,0 +1,36 @@
+# Integration overlay: wires this component to the other TDP components in
+# ${TDP_NAMESPACE}, assuming each is deployed with its default Application name
+# (the Helm release name) from this kit. Layered by ArgoCD after values.yaml and
+# values-gitops.yaml; delete this file to deploy the component stand-alone.
+#
+# Object storage is tdp-ozone's S3 Gateway. Ozone ships with security off
+# (tdp-ozone/values-gitops.yaml), so the gateway does not validate signatures:
+# the access key is only used as the Ozone user name and the secret is ignored.
+# The keys below are NOT real credentials; replace them with Secret-backed ones
+# if Ozone security is enabled. The buckets used here ("warehouse",
+# "clickhouse-data") must exist in Ozone's /s3v volume.
+
+# Datasources imported by the init job (superset import_datasources) on every sync.
+tdp-superset:
+  datasources:
+    autoImport:
+      enabled: true
+
+    # User "superset" is defined in tdp-clickhouse/values-integration.yaml with
+    # the same variable (TDP_CLICKHOUSE_SUPERSET_PASSWORD in variables.env).
+    clickhouse:
+      enabled: true
+      host: "clickhouse-tdp-clickhouse.${TDP_NAMESPACE}.svc.cluster.local"
+      username: "superset"
+      password: "${TDP_CLICKHOUSE_SUPERSET_PASSWORD}"
+
+    # Trino runs without authentication over HTTP: the username is only an
+    # identity and the password must stay empty (the Trino client refuses to
+    # send a password over plain HTTP). Catalogs hive, clickhouse, tpch, tpcds
+    # and memory are also reachable from SQL Lab.
+    trino:
+      enabled: true
+      host: "tdp-trino.${TDP_NAMESPACE}.svc.cluster.local"
+      catalog: "iceberg"
+      username: "superset"
+      password: ""

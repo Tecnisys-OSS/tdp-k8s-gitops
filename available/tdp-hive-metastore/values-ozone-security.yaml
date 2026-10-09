@@ -1,0 +1,20 @@
+# Ozone security overlay: layered by ArgoCD last, after values-integration.yaml.
+# deploy.sh renders it only with TDP_OZONE_SECURITY=true
+# (enable-ozone-security.sh); otherwise the file does not exist and the
+# Application skips it.
+#
+# With Ozone security on, the S3 Gateway validates every request, so the
+# placeholder keys in values-integration.yaml stop working. This reads the real
+# key from tdp-ozone's Secret "ozone-s3-credentials" (filled by tdp-ozone's
+# PostSync Job; it must be in this namespace, TDP_NAMESPACE) instead of the
+# chart's own <release>-hive-s3 Secret. The references are not optional: until
+# the Secret is filled the pod waits in CreateContainerConfigError and then
+# starts on its own. A pod that was already running keeps the old keys until
+# restarted.
+
+tdp-hive-metastore:
+  metastore:
+    s3:
+      existingSecret: ozone-s3-credentials
+      existingSecretAccessKeyKey: aws_access_key_id
+      existingSecretSecretKeyKey: aws_secret_access_key

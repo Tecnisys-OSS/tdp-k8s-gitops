@@ -96,3 +96,22 @@ tdp-postgresql:
   # Prometheus metrics exporter.
   metrics:
     enabled: false
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

@@ -15,8 +15,13 @@ spec:
     targetRevision: ${HELM_CHART_VERSION}
     chart: tdp-postgresql
     helm:
+      # values-gitops.yaml / values-integration.yaml are optional overlays:
+      # delete one to opt out of it (missing files are skipped).
+      ignoreMissingValueFiles: true
       valueFiles:
       - $values/current/tdp-postgresql/values.yaml
+      - $values/current/tdp-postgresql/values-gitops.yaml
+      - $values/current/tdp-postgresql/values-integration.yaml
   
   - repoURL: '${GIT_REPO_URL}'
     targetRevision: main

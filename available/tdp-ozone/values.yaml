@@ -48,6 +48,12 @@ tdp-ozone:
     tecnisys.io/cluster: tdp
     tecnisys.com/licensed: "true"
     tecnisys.com/product: tdp-ozone
+  # The same pair on the om/scm/datanode/s3g/recon pods (commonLabels stops
+  # at the StatefulSets/Deployment): the operator counts the worker nodes
+  # running TDP from pods (status.capacity). Remove it here too to opt out.
+  podLabels:
+    tecnisys.com/licensed: "true"
+    tecnisys.com/product: tdp-ozone
 
   # Common security context (applied to pod level)
   # Configured to satisfy PodSecurity "restricted" profile
@@ -464,7 +470,7 @@ tdp-ozone:
           # kubernetes.io/ingress.class: nginx
           # cert-manager.io/cluster-issuer: letsencrypt
         hosts:
-          - host: ozone-s3.tdp.local
+          - host: ozone-s3.${TDP_DOMAIN}
             paths:
               - path: /
                 pathType: Prefix
@@ -478,7 +484,7 @@ tdp-ozone:
         ingressClassName: ""
         annotations: {}
         hosts:
-          - host: ozone-s3-ui.tdp.local
+          - host: ozone-s3-ui.${TDP_DOMAIN}
             paths:
               - path: /
                 pathType: Prefix
@@ -489,7 +495,7 @@ tdp-ozone:
       ingressClassName: ""
       annotations: {}
       hosts:
-        - host: ozone-om.tdp.local
+        - host: ozone-om.${TDP_DOMAIN}
           paths:
             - path: /
               pathType: Prefix
@@ -500,7 +506,7 @@ tdp-ozone:
       ingressClassName: ""
       annotations: {}
       hosts:
-        - host: ozone-scm.tdp.local
+        - host: ozone-scm.${TDP_DOMAIN}
           paths:
             - path: /
               pathType: Prefix
@@ -511,7 +517,7 @@ tdp-ozone:
       ingressClassName: ""
       annotations: {}
       hosts:
-        - host: ozone-recon.tdp.local
+        - host: ozone-recon.${TDP_DOMAIN}
           paths:
             - path: /
               pathType: Prefix
@@ -536,7 +542,7 @@ tdp-ozone:
       rest:
         enabled: true
         hostnames:
-          - ozone-s3.tdp.local
+          - ozone-s3.${TDP_DOMAIN}
         rules:
           - matches:
               - path:
@@ -555,7 +561,7 @@ tdp-ozone:
       web:
         enabled: true
         hostnames:
-          - ozone-s3-ui.tdp.local
+          - ozone-s3-ui.${TDP_DOMAIN}
         rules:
           - matches:
               - path:
@@ -571,7 +577,7 @@ tdp-ozone:
     om:
       enabled: true
       hostnames:
-        - ozone-om.tdp.local
+        - ozone-om.${TDP_DOMAIN}
       rules:
         - matches:
             - path:
@@ -587,7 +593,7 @@ tdp-ozone:
     scm:
       enabled: true
       hostnames:
-        - ozone-scm.tdp.local
+        - ozone-scm.${TDP_DOMAIN}
       rules:
         - matches:
             - path:
@@ -603,7 +609,7 @@ tdp-ozone:
     recon:
       enabled: true
       hostnames:
-        - ozone-recon.tdp.local
+        - ozone-recon.${TDP_DOMAIN}
       rules:
         - matches:
             - path:
@@ -627,3 +633,22 @@ TDP-Settings:
     # Note: Gateway API and Ingress are mutually exclusive - only one should be enabled
     gatewayApi:
       enabled: false
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

@@ -8,13 +8,17 @@ metadata:
   annotations:
     argocd.argoproj.io/description: |
       Bootstrap applications for TDP
-spec: 
+spec:
   project: ${TDP_NAMESPACE}
   source:
     repoURL: '${GIT_REPO_URL}'
     path: current
     directory:
       recurse: true
+      # The rendered Secrets hold the git and registry credentials: deploy.sh
+      # applies them directly and they are git-ignored, so keep ArgoCD from
+      # expecting (and pruning) them here.
+      exclude: 'common/*-secret.yaml'
     targetRevision: main
   destination:
     server: 'https://kubernetes.default.svc'
@@ -23,4 +27,16 @@ spec:
     automated:
       selfHeal: true
       prune: true
-    
+    syncOptions:
+      # Without this, a sync would still overwrite the ignored fields below.
+      - RespectIgnoreDifferences=true
+  # ArgoCD adds post-delete finalizers to a child Application whose chart has
+  # PostDelete hooks (tdp-airflow, tdp-cloudbeaver, tdp-hive-metastore, ...).
+  # They are not in git, so without this the app of apps flips to OutOfSync,
+  # self-heals by stripping them, ArgoCD adds them back, and so on, which also
+  # risks skipping the cleanup hooks when the child is deleted.
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Application
+      jqPathExpressions:
+        - '.metadata.finalizers[]? | select(startswith("post-delete-finalizer.argocd.argoproj.io"))'

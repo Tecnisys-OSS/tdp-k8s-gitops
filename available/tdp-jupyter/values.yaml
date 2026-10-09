@@ -31,9 +31,13 @@ tdp-jupyter:
   # scheduling.userPlaceholder's own metadata.labels — license expiry scales
   # the hub/proxy/scheduler Deployments and preserves the placeholder
   # StatefulSet, per the whole-platform policy's per-kind behavior.
-  # Per-user notebook servers can never be covered — KubeSpawner creates them
-  # as ephemeral Pods outside this Helm release. Remove the two tecnisys.com/*
-  # keys below to opt this chart out of enforcement.
+  # commonLabels never reaches pod templates, so the same pair is repeated in
+  # hub.labels, proxy.labels, scheduling.*.labels and singleuser.extraLabels
+  # below: the operator counts the worker nodes running TDP from pods
+  # (status.capacity), per-user notebook servers included (KubeSpawner
+  # creates them as bare Pods outside this Helm release, so scaling can
+  # never stop them; the optional podEnforcement evicts them). Remove the
+  # tecnisys.com/* keys in all of these places to opt this chart out.
   commonLabels:
     tecnisys.com/licensed: "true"
     tecnisys.com/product: tdp-jupyter
@@ -67,6 +71,8 @@ tdp-jupyter:
   hub:
     labels:
       tecnisys.io/cluster: tdp
+      tecnisys.com/licensed: "true"
+      tecnisys.com/product: tdp-jupyter
 
     podSecurityContext:
       runAsNonRoot: true
@@ -106,7 +112,7 @@ tdp-jupyter:
         authenticator_class: dummy
       DummyAuthenticator:
         username: admin
-        password: tdp-password  # Change for production!
+        password: "ChangeMe!T3c"  # Change for production!
       KubeSpawner:
         # Default image with Spark pre-installed
         image_spec: "registry.tecnisys.com.br/tdp/images/jupyter/jupyter:4.5.6-2"
@@ -253,6 +259,8 @@ tdp-jupyter:
   proxy:
     labels:
       tecnisys.io/cluster: tdp
+      tecnisys.com/licensed: "true"
+      tecnisys.com/product: tdp-jupyter
 
     chp:
       containerSecurityContext:
@@ -304,6 +312,8 @@ tdp-jupyter:
   singleuser:
     extraLabels:
       tecnisys.io/cluster: tdp
+      tecnisys.com/licensed: "true"
+      tecnisys.com/product: tdp-jupyter
     uid: null
     fsGid: null
     allowPrivilegeEscalation: false
@@ -541,6 +551,8 @@ tdp-jupyter:
       enabled: true
       labels:
         tecnisys.io/cluster: tdp
+        tecnisys.com/licensed: "true"
+        tecnisys.com/product: tdp-jupyter
       containerSecurityContext:
         runAsNonRoot: false
         runAsUser: null
@@ -552,6 +564,8 @@ tdp-jupyter:
       enabled: true
       labels:
         tecnisys.io/cluster: tdp
+        tecnisys.com/licensed: "true"
+        tecnisys.com/product: tdp-jupyter
       containerSecurityContext:
         runAsNonRoot: true
         runAsUser: null
@@ -635,7 +649,7 @@ gatewayApi:
   jupyter:
     enabled: true
     hostnames:
-      - jupyter.tdp.local
+      - jupyter.${TDP_DOMAIN}
     rules:
       - matches:
           - path:
@@ -653,9 +667,28 @@ ingress:
   ingressClassName: "nginx"
   annotations: {}
   hosts:
-    - host: jupyter.tdp.local
+    - host: jupyter.${TDP_DOMAIN}
       paths:
         - path: /
           pathType: Prefix
   tls: []
 
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

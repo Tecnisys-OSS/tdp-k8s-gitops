@@ -1,0 +1,99 @@
+# Ozone security overlay: layered by ArgoCD last, after values-integration.yaml.
+# deploy.sh renders it only with TDP_OZONE_SECURITY=true
+# (enable-ozone-security.sh); otherwise the file does not exist and the
+# Application skips it. Port of the chart's values-tdp-ozone-auth.yaml.
+#
+# With Ozone security on, the S3 Gateway validates every request, so the
+# placeholder keys in values-integration.yaml stop working. This reads the real
+# key from tdp-ozone's Secret "ozone-s3-credentials" (filled by tdp-ozone's
+# PostSync Job; it must be in this namespace, TDP_NAMESPACE). The references
+# are not optional: until the Secret is filled the pods wait in
+# CreateContainerConfigError and then start on their own. Pods that were
+# already running keep the old keys until restarted. Drivers started outside
+# these pods (Jupyter, Airflow, spark-submit elsewhere) need the same two env
+# vars themselves.
+
+tdp-spark:
+  # core-site.xml: S3A keeps SimpleAWSCredentialsProvider (values.yaml) and
+  # Hadoop expands ${env.*} from the env vars below, in the master, worker
+  # and History Server pods and in the executors the workers start. Unlike the chart overlay's EnvironmentVariableCredentialsProvider,
+  # this does not depend on the AWS SDK version on the classpath.
+  hadoopConfig:
+    fs.s3a.access.key: "${env.AWS_ACCESS_KEY_ID}"
+    fs.s3a.secret.key: "${env.AWS_SECRET_ACCESS_KEY}"
+
+spark:
+  # Lists replace the ones in values.yaml as a whole: values.yaml's entries
+  # are repeated, plus the two keys.
+  # tests/gitops/ozone-security/test.sh checks the repeated entries.
+  master:
+    extraEnvVars:
+      - name: HOME
+        value: /tmp
+      - name: JAVA_TOOL_OPTIONS
+        value: "-Duser.home=/tmp -Duser.name=spark"
+      - name: HADOOP_USER_NAME
+        value: spark
+      - name: USER
+        value: spark
+      - name: SPARK_SUBMIT_OPTS
+        value: -Dspark.jars.ivy=/tmp/.ivy2
+      - name: HADOOP_CONF_DIR
+        value: /opt/bitnami/spark/hadoop-conf
+      - name: LD_PRELOAD
+        value: /opt/bitnami/common/lib/libnss_wrapper.so
+      - name: SPARK_LOCAL_DIRS
+        value: /tmp/spark-local
+      - name: AWS_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_access_key_id
+      - name: AWS_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_secret_access_key
+
+  worker:
+    extraEnvVars:
+      - name: HOME
+        value: /tmp
+      - name: JAVA_TOOL_OPTIONS
+        value: "-Duser.home=/tmp -Duser.name=spark"
+      - name: HADOOP_USER_NAME
+        value: spark
+      - name: USER
+        value: spark
+      - name: SPARK_SUBMIT_OPTS
+        value: -Dspark.jars.ivy=/tmp/.ivy2
+      - name: HADOOP_CONF_DIR
+        value: /opt/bitnami/spark/hadoop-conf
+      - name: LD_PRELOAD
+        value: /opt/bitnami/common/lib/libnss_wrapper.so
+      - name: SPARK_LOCAL_DIRS
+        value: /tmp/spark-local
+      - name: AWS_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_access_key_id
+      - name: AWS_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_secret_access_key
+
+  # The History Server reads its event logs from s3a://warehouse/spark-events.
+  historyServer:
+    extraEnvVars:
+      - name: AWS_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_access_key_id
+      - name: AWS_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: ozone-s3-credentials
+            key: aws_secret_access_key

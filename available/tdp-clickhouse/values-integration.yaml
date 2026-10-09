@@ -1,0 +1,79 @@
+# Integration overlay: wires this component to the other TDP components in
+# ${TDP_NAMESPACE}, assuming each is deployed with its default Application name
+# (the Helm release name) from this kit. Layered by ArgoCD after values.yaml and
+# values-gitops.yaml; delete this file to deploy the component stand-alone.
+#
+# Object storage is tdp-ozone's S3 Gateway. Ozone ships with security off
+# (tdp-ozone/values-gitops.yaml), so the gateway does not validate signatures:
+# the access key is only used as the Ozone user name and the secret is ignored.
+# The keys below are NOT real credentials. With Ozone security on
+# (TDP_OZONE_SECURITY=true, enable-ozone-security.sh), values-ozone-security.yaml
+# replaces them with tdp-ozone's Secret "ozone-s3-credentials". The buckets used here ("warehouse",
+# "clickhouse-data") must exist in Ozone's /s3v volume.
+
+tdp-clickhouse:
+  clickhouse:
+    # Users for in-cluster clients: "trino" (tdp-trino clickhouse catalog) and
+    # "superset" (tdp-superset datasource). The built-in "default" user only
+    # accepts 127.0.0.1, and tdpUser never creates its user, so neither works
+    # for other pods. Passwords come from variables.env
+    # (TDP_CLICKHOUSE_TRINO_PASSWORD, TDP_CLICKHOUSE_SUPERSET_PASSWORD), which
+    # tdp-trino/values-integration.yaml and tdp-superset/values-integration.yaml
+    # also use, so the clients stay in sync.
+    # This replaces extraUsers from values.yaml as a whole (it is one string),
+    # so the <profiles> block is repeated here.
+    extraUsers: |
+      <yandex>
+        <profiles>
+          <default>
+            <query_cache_system_table_handling>ignore</query_cache_system_table_handling>
+          </default>
+        </profiles>
+        <users>
+          <trino>
+            <password>${TDP_CLICKHOUSE_TRINO_PASSWORD}</password>
+            <networks>
+              <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+          </trino>
+          <superset>
+            <password>${TDP_CLICKHOUSE_SUPERSET_PASSWORD}</password>
+            <networks>
+              <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+          </superset>
+        </users>
+      </yandex>
+
+    # tdp-ozone S3 Gateway as an extra disk/storage policy "ozone" (bucket
+    # "clickhouse-data"). The default policy stays on the local PVC; opt a table
+    # in with SETTINGS storage_policy = 'ozone'. skip_access_check keeps
+    # ClickHouse starting even before the bucket exists.
+    extraConfig: |
+      <yandex>
+        <storage_configuration>
+          <disks>
+            <ozone>
+              <type>s3</type>
+              <endpoint>http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878/clickhouse-data/data/</endpoint>
+              <access_key_id>clickhouse</access_key_id>
+              <secret_access_key>ozone-unsecured</secret_access_key>
+              <region>us-east-1</region>
+              <skip_access_check>true</skip_access_check>
+            </ozone>
+          </disks>
+          <policies>
+            <ozone>
+              <volumes>
+                <main>
+                  <disk>ozone</disk>
+                </main>
+              </volumes>
+            </ozone>
+          </policies>
+        </storage_configuration>
+      </yandex>

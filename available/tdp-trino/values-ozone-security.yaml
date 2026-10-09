@@ -1,0 +1,51 @@
+# Ozone security overlay: layered by ArgoCD last, after values-integration.yaml.
+# deploy.sh renders it only with TDP_OZONE_SECURITY=true
+# (enable-ozone-security.sh); otherwise the file does not exist and the
+# Application skips it.
+#
+# With Ozone security on, the S3 Gateway validates every request, so the
+# placeholder keys in values-integration.yaml stop working. This reads the real
+# key from tdp-ozone's Secret "ozone-s3-credentials" (filled by tdp-ozone's
+# PostSync Job; it must be in this namespace, TDP_NAMESPACE). The references
+# are not optional: until the Secret is filled the pods wait in
+# CreateContainerConfigError and then start on their own. Pods that were
+# already running keep the old keys until restarted.
+
+tdp-trino:
+  # On the coordinator and every worker.
+  env:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom:
+        secretKeyRef:
+          name: ozone-s3-credentials
+          key: aws_access_key_id
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom:
+        secretKeyRef:
+          name: ozone-s3-credentials
+          key: aws_secret_access_key
+
+  # Same catalogs as values-integration.yaml (each one is a single string, so
+  # it is repeated whole), with the keys read from the env above. The
+  # clickhouse catalog does not use Ozone and is left as it is.
+  catalogs:
+    hive: |
+      connector.name=hive
+      hive.metastore.uri=thrift://tdp-hive-metastore-metastore.${TDP_NAMESPACE}.svc.cluster.local:9083
+      fs.native-s3.enabled=true
+      s3.endpoint=http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878
+      s3.region=us-east-1
+      s3.path-style-access=true
+      s3.aws-access-key=${ENV:AWS_ACCESS_KEY_ID}
+      s3.aws-secret-key=${ENV:AWS_SECRET_ACCESS_KEY}
+
+    iceberg: |
+      connector.name=iceberg
+      iceberg.catalog.type=hive_metastore
+      hive.metastore.uri=thrift://tdp-hive-metastore-metastore.${TDP_NAMESPACE}.svc.cluster.local:9083
+      fs.native-s3.enabled=true
+      s3.endpoint=http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878
+      s3.region=us-east-1
+      s3.path-style-access=true
+      s3.aws-access-key=${ENV:AWS_ACCESS_KEY_ID}
+      s3.aws-secret-key=${ENV:AWS_SECRET_ACCESS_KEY}

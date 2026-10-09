@@ -1,0 +1,12 @@
+# GitOps overlay, layered by ArgoCD on top of values.yaml (see the Application
+# manifest next to this file). values.yaml is replaced by the chart defaults on
+# every release; this file is not, so GitOps-specific defaults live here.
+#
+# ${TDP_STORAGE_CLASS} / ${TDP_INGRESS_CLASS} come from variables.env. When one is
+# empty the key renders as null, which removes it and falls back to the chart /
+# cluster default (default StorageClass, default IngressClass).
+
+tdp-postgresql:
+  primary:
+    persistence:
+      storageClass: ${TDP_STORAGE_CLASS}

@@ -4,6 +4,11 @@
 # Global configuration
 global:
   storageClass: "standard"
+  # Pull secret for registry.tecnisys.com.br/tdp/images/* (private): a
+  # kubernetes.io/dockerconfigjson Secret in the release namespace. Used by the
+  # Spark subchart's master/worker and by this chart's maintenance CronJobs.
+  imagePullSecrets:
+    - tdp-registry
   security:
     allowInsecureImages: true
   compatibility:
@@ -37,7 +42,7 @@ spark:
     tecnisys.com/product: tdp-iceberg
   image:
     # Host and project in one string on purpose: the release pipeline rewrites
-    # registry.tecnisys.com.br/tdp-dev/... to registry.tecnisys.com.br/tdp/...
+    # registry.tecnisys.com.br/tdp/... to registry.tecnisys.com.br/tdp/...
     # only when both appear together (a split registry:/repository: kept
     # "tdp-dev" in production refs). Empty registry = no prefix.
     registry: ""
@@ -66,6 +71,9 @@ maintenance:
       repository: "registry.tecnisys.com.br/tdp/images/spark"
       tag: "4.0.2-2"
       pullPolicy: IfNotPresent
+    # Extra pull secrets for the maintenance CronJobs only (global.imagePullSecrets
+    # above already applies to them). Names or {name: ...} maps.
+    imagePullSecrets: []
 
     # Resource allocation for maintenance jobs
     resources:
@@ -190,3 +198,22 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

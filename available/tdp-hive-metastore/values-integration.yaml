@@ -1,0 +1,21 @@
+# Integration overlay: wires this component to the other TDP components in
+# ${TDP_NAMESPACE}, assuming each is deployed with its default Application name
+# (the Helm release name) from this kit. Layered by ArgoCD after values.yaml and
+# values-gitops.yaml; delete this file to deploy the component stand-alone.
+#
+# Object storage is tdp-ozone's S3 Gateway. Ozone ships with security off
+# (tdp-ozone/values-gitops.yaml), so the gateway does not validate signatures:
+# the access key is only used as the Ozone user name and the secret is ignored.
+# The keys below are NOT real credentials. With Ozone security on
+# (TDP_OZONE_SECURITY=true, enable-ozone-security.sh), values-ozone-security.yaml
+# replaces them with tdp-ozone's Secret "ozone-s3-credentials". The buckets used here ("warehouse",
+# "clickhouse-data") must exist in Ozone's /s3v volume.
+
+tdp-hive-metastore:
+  metastore:
+    # Warehouse on tdp-ozone (bucket "warehouse").
+    type: s3
+    s3:
+      endpoint: "http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878"
+      accessKey: "hive"
+      secretKey: "ozone-unsecured"

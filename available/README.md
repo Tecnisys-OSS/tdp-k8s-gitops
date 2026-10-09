@@ -11,7 +11,12 @@ This repository drives the deployment of TDP (Tecnisys Data Platform) components
 All applications follow the same pattern:
 
 - **External Helm Chart**: Pulled from `registry.tecnisys.com.br/tdp/charts`
-- **Local Values**: Managed in Git at `available/<app-name>/values.yaml`
+- **Local Values**: Managed in Git at `available/<app-name>/values.yaml` (chart defaults, refreshed on every release),
+  plus the optional `values-gitops.yaml` (GitOps defaults, storage/ingress classes) and `values-integration.yaml`
+  (wiring to the other TDP components) overlays, which are layered on top and kept across releases.
+  With `TDP_OZONE_SECURITY=true` (`enable-ozone-security.sh`), the Ozone components and its S3 clients
+  also get `values-ozone-security.yaml` (Kerberos and real S3 authentication; see "Ozone security"
+  in the kit README)
 - **Auto-sync**: Changes to values.yaml are automatically applied
 
 ## Prerequisites
@@ -22,10 +27,10 @@ The components below are **cluster bootstrap dependencies**, not part of this `a
 |---|---|---|
 | `tdp-crds` | Cluster-wide CRDs (ArgoCD + TDP custom resources) | `deploy.sh --install` |
 | `tdp-argo` | ArgoCD itself | `deploy.sh --install` |
-| `tdp-license` | License enforcement subsystem (operator/webhook/agent/license-server) | manual `helm install`, by the cluster administrator |
+| `tdp-license` | License enforcement subsystem (operator/webhook/agent/license-server) | `deploy.sh --install` (or `--license`), before `tdp-argo` |
 | `tdp-operator` | Shared operator instance required by some components (e.g. `tdp-kafka`, `tdp-clickhouse`) | manual `helm install`, by the cluster administrator |
 
-> `tdp-license` and `tdp-operator` are intentionally **not** part of `deploy.sh --install`. They are installed beforehand via `helm install` directly by the tdp-k8s administrator/operator team, outside of this GitOps flow.
+> `tdp-license` is installed by `deploy.sh --install` (and `--license`) from the license files in `TDP_LICENSE_PUBLIC_KEYS_FILE`/`TDP_LICENSE_FILE`, before `tdp-argo`: ArgoCD and every component refuse to install without a VALID license. `tdp-operator` is intentionally **not** part of `deploy.sh --install`: the tdp-k8s administrator/operator team installs it beforehand via `helm install`, outside of this GitOps flow.
 
 ## Available Applications
 

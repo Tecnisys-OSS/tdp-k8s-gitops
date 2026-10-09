@@ -56,7 +56,7 @@ tdp-hive-metastore:
     # - enabled=false without the hooks: create the Secret yourself before installing.
     database: hive
     username: hive
-    password: "hive"
+    password: "ChangeMe!T3c"
 
     # Security context overrides specific to the internal postgres Deployment.
     # runAsUser: 999 (postgres uid) causes the entrypoint to skip the root-level
@@ -93,13 +93,19 @@ tdp-hive-metastore:
       warehouseDir: /opt/hive/warehouse
 
     # S3 settings used when metastore.type=s3 (e.g. tdp-ozone's S3 Gateway on :9878).
-    # accessKey/secretKey are rendered into the Secret <release>-hive-s3.
+    # accessKey/secretKey are rendered into the Secret <release>-hive-s3, unless
+    # existingSecret names a Secret to read them from instead (e.g. tdp-ozone's
+    # "ozone-s3-credentials" with keys aws_access_key_id/aws_secret_access_key
+    # when Ozone security is on).
     s3:
       warehouseDir: s3a://warehouse/hive
       bucket: warehouse
       endpoint: "http://<S3_SERVICE>.<NAMESPACE>.svc.cluster.local:9878"
       accessKey: "<S3_ACCESS_KEY>"
       secretKey: "<S3_SECRET_KEY>"
+      existingSecret: ""
+      existingSecretAccessKeyKey: access-key
+      existingSecretSecretKeyKey: secret-key
       pathStyleAccess: true
       region: us-east-1
 
@@ -146,3 +152,22 @@ TDP-Settings:
     # Expected key: postgres-password
     externalSecret:
       releaseName: "tdp-postgresql-project"
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

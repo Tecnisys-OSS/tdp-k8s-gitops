@@ -16,8 +16,16 @@ spec:
     targetRevision: ${HELM_CHART_VERSION}
     chart: tdp-spark
     helm:
+      # values-gitops.yaml / values-integration.yaml are optional overlays:
+      # delete one to opt out of it (missing files are skipped).
+      # values-ozone-security.yaml exists only with TDP_OZONE_SECURITY=true
+      # (enable-ozone-security.sh).
+      ignoreMissingValueFiles: true
       valueFiles:
       - $values/current/tdp-spark/values.yaml
+      - $values/current/tdp-spark/values-gitops.yaml
+      - $values/current/tdp-spark/values-integration.yaml
+      - $values/current/tdp-spark/values-ozone-security.yaml
   
   - repoURL: '${GIT_REPO_URL}'
     targetRevision: main

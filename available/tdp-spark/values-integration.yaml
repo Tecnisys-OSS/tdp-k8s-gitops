@@ -1,0 +1,41 @@
+# Integration overlay: wires this component to the other TDP components in
+# ${TDP_NAMESPACE}, assuming each is deployed with its default Application name
+# (the Helm release name) from this kit. Layered by ArgoCD after values.yaml and
+# values-gitops.yaml; delete this file to deploy the component stand-alone.
+#
+# Object storage is tdp-ozone's S3 Gateway. Ozone ships with security off
+# (tdp-ozone/values-gitops.yaml), so the gateway does not validate signatures:
+# the access key is only used as the Ozone user name and the secret is ignored.
+# The keys below are NOT real credentials. With Ozone security on
+# (TDP_OZONE_SECURITY=true, enable-ozone-security.sh), values-ozone-security.yaml
+# replaces them with tdp-ozone's Secret "ozone-s3-credentials". The buckets used here ("warehouse",
+# "clickhouse-data") must exist in Ozone's /s3v volume.
+
+tdp-spark:
+  # core-site.xml: read by Hadoop before spark-defaults.conf, so this is enough
+  # for s3a:// paths (fs.defaultFS s3a://warehouse is already set in values.yaml).
+  hadoopConfig:
+    fs.s3a.endpoint: "http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878"
+    fs.s3a.access.key: "spark"
+    fs.s3a.secret.key: "ozone-unsecured"
+
+  # Used only when deltaLake.enabled / iceberg.enabled are turned on.
+  deltaLake:
+    storage:
+      endpoint: "http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878"
+  iceberg:
+    catalog:
+      uri: "thrift://tdp-hive-metastore-metastore.${TDP_NAMESPACE}.svc.cluster.local:9083"
+    storage:
+      endpoint: "http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878"
+
+spark:
+  # Spark History Server, with the event logs in Ozone next to the warehouse
+  # (spark.historyServer.eventLog.dir, default s3a://warehouse/spark-events).
+  # The S3 endpoint and keys come from tdp-spark.hadoopConfig above; the chart
+  # creates the directory and puts the S3A jars on the drivers' classpath. Its
+  # UI follows TDP_EXPOSE at spark-history.${TDP_DOMAIN}. Needs the "warehouse"
+  # bucket: until it exists the History Server's init container keeps failing
+  # (Init:CrashLoopBackOff) and the pod starts once the bucket is created.
+  historyServer:
+    enabled: true

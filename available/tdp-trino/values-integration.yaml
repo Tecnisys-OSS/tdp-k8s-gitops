@@ -1,0 +1,43 @@
+# Integration overlay: wires this component to the other TDP components in
+# ${TDP_NAMESPACE}, assuming each is deployed with its default Application name
+# (the Helm release name) from this kit. Layered by ArgoCD after values.yaml and
+# values-gitops.yaml; delete this file to deploy the component stand-alone.
+#
+# Object storage is tdp-ozone's S3 Gateway. Ozone ships with security off
+# (tdp-ozone/values-gitops.yaml), so the gateway does not validate signatures:
+# the access key is only used as the Ozone user name and the secret is ignored.
+# The keys below are NOT real credentials. With Ozone security on
+# (TDP_OZONE_SECURITY=true, enable-ozone-security.sh), values-ozone-security.yaml
+# replaces them with tdp-ozone's Secret "ozone-s3-credentials". The buckets used here ("warehouse",
+# "clickhouse-data") must exist in Ozone's /s3v volume.
+
+# "connection-password" is TDP_CLICKHOUSE_TRINO_PASSWORD from variables.env, the
+# same variable that sets the "trino" user in tdp-clickhouse/values-integration.yaml.
+tdp-trino:
+  catalogs:
+    hive: |
+      connector.name=hive
+      hive.metastore.uri=thrift://tdp-hive-metastore-metastore.${TDP_NAMESPACE}.svc.cluster.local:9083
+      fs.native-s3.enabled=true
+      s3.endpoint=http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878
+      s3.region=us-east-1
+      s3.path-style-access=true
+      s3.aws-access-key=trino
+      s3.aws-secret-key=ozone-unsecured
+
+    iceberg: |
+      connector.name=iceberg
+      iceberg.catalog.type=hive_metastore
+      hive.metastore.uri=thrift://tdp-hive-metastore-metastore.${TDP_NAMESPACE}.svc.cluster.local:9083
+      fs.native-s3.enabled=true
+      s3.endpoint=http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878
+      s3.region=us-east-1
+      s3.path-style-access=true
+      s3.aws-access-key=trino
+      s3.aws-secret-key=ozone-unsecured
+
+    clickhouse: |
+      connector.name=clickhouse
+      connection-url=jdbc:clickhouse://clickhouse-tdp-clickhouse.${TDP_NAMESPACE}.svc.cluster.local:8123/
+      connection-user=trino
+      connection-password=${TDP_CLICKHOUSE_TRINO_PASSWORD}

@@ -15,8 +15,13 @@ spec:
     targetRevision: ${HELM_CHART_VERSION}
     chart: tdp-superset
     helm:
+      # values-gitops.yaml / values-integration.yaml are optional overlays:
+      # delete one to opt out of it (missing files are skipped).
+      ignoreMissingValueFiles: true
       valueFiles:
       - $values/current/tdp-superset/values.yaml
+      - $values/current/tdp-superset/values-gitops.yaml
+      - $values/current/tdp-superset/values-integration.yaml
   
   - repoURL: '${GIT_REPO_URL}'
     targetRevision: main

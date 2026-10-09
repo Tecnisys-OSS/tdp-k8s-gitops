@@ -47,11 +47,11 @@
 #     The brokers ARE, however, reachable at the *Pod* level: the license
 #     labels in extraLabels below land on each broker Pod's own
 #     metadata.labels (via Kafka/KafkaNodePool spec.template.pod), which is
-#     verified and is NOT deprecated. That is the interception point a
-#     Pod-scoped enforcement action can use. Enforcing on it still requires
-#     a change in tdp-license-operator (delete protected Pods + deny their
-#     re-creation at admission); until that ships, the labels below are
-#     wiring/visibility only and license expiry does not stop the brokers.
+#     verified and is NOT deprecated. tdp-license-operator's optional
+#     podEnforcement (off by default) uses them: while a license is blocked
+#     it evicts these pods and denies their re-creation at admission. The
+#     operator also counts them for the lease's worker-node limit. Without
+#     podEnforcement, license expiry does not stop the brokers.
 #     Full live evaluation of every candidate mechanism — including why
 #     NetworkPolicy and Service-selector tricks cannot work here, and why
 #     scaling KafkaNodePool.spec.replicas must never be used — is in
@@ -257,6 +257,11 @@ kafka-ui:
   labels:
     tecnisys.com/licensed: "true"
     tecnisys.com/product: tdp-kafka
+  # The same pair on the kafka-ui pods: the operator counts the worker nodes
+  # running TDP from pods (status.capacity), not from their Deployments.
+  podLabels:
+    tecnisys.com/licensed: "true"
+    tecnisys.com/product: tdp-kafka
 
   # kafka-ui's own config source is yamlApplicationConfigConfigMap below;
   # yamlApplicationConfig must stay null so it doesn't also render (see the
@@ -286,7 +291,7 @@ kafka-ui:
       security:
         user:
           name: admin
-          password: admin
+          password: "ChangeMe!T3c"
 
     # =====================================================
     # LDAP / Active Directory Authentication
@@ -483,7 +488,7 @@ gatewayApi:
   kafkaUi:
     enabled: true
     hostnames:
-      - kafka-ui.tdp.local
+      - kafka-ui.${TDP_DOMAIN}
     rules:
       - matches:
           - path:
@@ -501,7 +506,7 @@ ingress:
   ingressClassName: nginx
   annotations: {}
   hosts:
-    - host: kafka-ui.tdp.local
+    - host: kafka-ui.${TDP_DOMAIN}
       paths:
         - path: /
           pathType: Prefix
@@ -519,3 +524,22 @@ TDP-Settings:
     # Enable Kubernetes Gateway API (HTTPRoute) resources for Kafka UI
     gatewayApi:
       enabled: false
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

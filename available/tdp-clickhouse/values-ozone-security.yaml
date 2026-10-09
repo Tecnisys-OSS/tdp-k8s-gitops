@@ -1,0 +1,60 @@
+# Ozone security overlay: layered by ArgoCD last, after values-integration.yaml.
+# deploy.sh renders it only with TDP_OZONE_SECURITY=true
+# (enable-ozone-security.sh); otherwise the file does not exist and the
+# Application skips it.
+#
+# With Ozone security on, the S3 Gateway validates every request, so the
+# placeholder keys in values-integration.yaml stop working. This reads the real
+# key from tdp-ozone's Secret "ozone-s3-credentials" (filled by tdp-ozone's
+# PostSync Job; it must be in this namespace, TDP_NAMESPACE). The references
+# are not optional: until the Secret is filled the pods wait in
+# CreateContainerConfigError and then start on their own. Pods that were
+# already running keep the old keys until restarted.
+
+tdp-clickhouse:
+  clickhouse:
+    # On the ClickHouse server pods: the chart takes the env of the first entry
+    # in podTemplate.spec.containers. The "ozone" disk below reads them with
+    # from_env.
+    podTemplate:
+      spec:
+        containers:
+          - name: clickhouse
+            env:
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: ozone-s3-credentials
+                    key: aws_access_key_id
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: ozone-s3-credentials
+                    key: aws_secret_access_key
+
+    # Same storage configuration as values-integration.yaml (one string, so it
+    # is repeated whole), with the keys taken from the env above.
+    extraConfig: |
+      <yandex>
+        <storage_configuration>
+          <disks>
+            <ozone>
+              <type>s3</type>
+              <endpoint>http://tdp-ozone-s3g-rest.${TDP_NAMESPACE}.svc.cluster.local:9878/clickhouse-data/data/</endpoint>
+              <access_key_id from_env="AWS_ACCESS_KEY_ID"/>
+              <secret_access_key from_env="AWS_SECRET_ACCESS_KEY"/>
+              <region>us-east-1</region>
+              <skip_access_check>true</skip_access_check>
+            </ozone>
+          </disks>
+          <policies>
+            <ozone>
+              <volumes>
+                <main>
+                  <disk>ozone</disk>
+                </main>
+              </volumes>
+            </ozone>
+          </policies>
+        </storage_configuration>
+      </yandex>

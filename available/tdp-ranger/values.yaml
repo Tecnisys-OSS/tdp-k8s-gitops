@@ -22,7 +22,8 @@ tdp-ranger:
   # (stack/charts/upstream/ranger/apache-ranger/templates/_helpers.tpl) and
   # reaches all 5 Deployments' own metadata.labels (ranger, ranger-db,
   # ranger-solr, ranger-zk, ranger-usersync) — license expiry scales the
-  # whole Ranger stack together. Deliberately kept separate from
+  # whole Ranger stack together — and their pods, which the operator counts
+  # as worker nodes running TDP (status.capacity). Deliberately kept separate from
   # `clusterLabel` above (which already emits tecnisys.io/cluster on its
   # own) to avoid emitting that key twice. Remove the two tecnisys.com/*
   # keys below to opt this chart out of enforcement.
@@ -52,7 +53,7 @@ tdp-ranger:
     # Required when rangerIntegrations.configJob.enabled is true.
     # Use a strong password (minimum 8 chars with uppercase, lowercase, number, and special char).
     # This default is an example and must be changed before production use.
-    adminPassword: "ChangeMe!2026"
+    adminPassword: "ChangeMe!T3c"
     # Optional: source the admin password from an existing Secret instead of
     # the literal above. Leave adminExistingSecret empty to keep the literal
     # (default, unchanged behavior). Mirrors existingSecret/
@@ -66,7 +67,7 @@ tdp-ranger:
     # Database credentials
     dbUser: "ranger"
     # This default is an example and must be changed before production use.
-    dbPassword: "ChangeMe!2026"  # Default value when not using an existing Secret
+    dbPassword: "ChangeMe!T3c"  # Default value when not using an existing Secret
     #dbName is set to default `ranger`, cannot be modified
     # Use secret created by db-create-job (name will be constructed in template)
     existingSecret: "{{ .Release.Name }}-ranger-database"
@@ -393,7 +394,7 @@ gatewayApi:
   ranger:
     enabled: true
     hostnames:
-      - ranger.tdp.local
+      - ranger.${TDP_DOMAIN}
     rules:
       - matches:
           - path:
@@ -411,8 +412,27 @@ ingress:
   ingressClassName: ""
   annotations: {}
   hosts:
-    - host: ranger.tdp.local
+    - host: ranger.${TDP_DOMAIN}
       paths:
         - path: /
           pathType: Prefix
   tls: []
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

@@ -1,0 +1,54 @@
+# GitOps overlay, layered by ArgoCD on top of values.yaml (see the Application
+# manifest next to this file). values.yaml is replaced by the chart defaults on
+# every release; this file is not, so GitOps-specific defaults live here.
+#
+# ${TDP_STORAGE_CLASS} / ${TDP_INGRESS_CLASS} come from variables.env. When one is
+# empty the key renders as null, which removes it and falls back to the chart /
+# cluster default (default StorageClass, default IngressClass).
+
+spark:
+  # Spark Master UI Ingress (the subchart's own; on in TDP_EXPOSE=ingress). The
+  # Master serves its links root-relative (/proxy/<worker>, /app/...), so no
+  # spark.ui.reverseProxyUrl is set and port-forward keeps working too. Only a
+  # worker page's "Back to Master" link shows the in-cluster master address.
+  ingress:
+    enabled: ${TDP_INGRESS_ENABLED}
+    hostname: spark.${TDP_DOMAIN}
+    ingressClassName: ${TDP_INGRESS_CLASS}
+    pathType: Prefix
+  storage:
+    persistentVolume:
+      storageClass: ${TDP_STORAGE_CLASS}
+    shared:
+      persistentVolume:
+        storageClass: ${TDP_STORAGE_CLASS}
+  historyServer:
+    # Used only when historyServer.eventLog.persistence is on
+    eventLog:
+      persistence:
+        storageClass: ${TDP_STORAGE_CLASS}
+    ingress:
+      ingressClassName: ${TDP_INGRESS_CLASS}
+
+# Exposure (TDP_EXPOSE / deploy.sh -e: ingress | gatewayapi | none). The two
+# switches are mutually exclusive; deploy.sh sets them from TDP_EXPOSE.
+TDP-Settings:
+  gateway:
+    ingress:
+      enabled: ${TDP_INGRESS_ENABLED}
+    gatewayApi:
+      enabled: ${TDP_GATEWAYAPI_ENABLED}
+
+gatewayApi:
+  # Gateway API: the shared Gateway the HTTPRoutes attach to (TDP_GATEWAY_NAME /
+  # TDP_GATEWAY_NAMESPACE). An entry without a name is skipped by the chart.
+  parentRefs:
+    - name: ${TDP_GATEWAY_NAME}
+      namespace: ${TDP_GATEWAY_NAMESPACE}
+  # Use the shared Gateway above, not one per chart. Also required by the charts:
+  # with gatewayApi on, their Gateway template reads gatewayApi.gateway.enabled.
+  gateway:
+    enabled: false
+  # Spark Master UI route (on in TDP_EXPOSE=gatewayapi, at spark.${TDP_DOMAIN})
+  spark:
+    enabled: true

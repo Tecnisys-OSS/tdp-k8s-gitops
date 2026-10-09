@@ -1,0 +1,7 @@
+# GitOps overlay for tdp-hive-metastore, layered by ArgoCD after values.yaml.
+tdp-hive-metastore:
+  # Component passwords: TDP_*_PASSWORD from variables.env, filled in by deploy.sh.
+  # Kept here, not in values.yaml, because scripts/sync-values-from-charts.sh
+  # overwrites values.yaml with the chart defaults.
+  postgres:
+    password: "${TDP_HIVE_DB_PASSWORD}"

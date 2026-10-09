@@ -93,10 +93,11 @@ tdp-spark:
     properties: |
       # Ensure Ivy local repository uses an absolute, writable path
       spark.jars.ivy /tmp/.ivy2
-      # Keep event logs under /tmp which is mounted as an EmptyDir
-      spark.eventLog.enabled true
-      spark.eventLog.dir file:///tmp/spark-events
-      spark.history.fs.logDirectory file:///tmp/spark-events
+      # Event logs stay off unless spark.historyServer is enabled, which appends
+      # spark.eventLog.* for its own directory below these lines. A driver with
+      # event logs on refuses to start when the log directory does not exist,
+      # and nothing creates one in the Spark image.
+      spark.eventLog.enabled false
       # Reverse proxy to allow accessing workers/applications via Master Web UI
       spark.ui.reverseProxy true
       # Hadoop Security - Disable Kerberos (CRITICAL for simple auth)
@@ -109,10 +110,14 @@ tdp-spark:
       # Set Hadoop user to prevent null user errors
       spark.hadoop.hadoop.user.name spark
       spark.hadoop.hadoop.user.group spark
-      # Executor/driver sizing defaults
+      # Executor/driver sizing defaults. The executor must fit in what a worker
+      # offers: the standalone worker advertises its container memory minus 1 GiB
+      # (3 GiB with the 4Gi limit below) and, in that same container, the worker
+      # daemon takes about 1 GiB of heap. An executor asking for more (it was 4g)
+      # is never scheduled and the application waits forever.
       spark.executor.instances 2
       spark.executor.cores 2
-      spark.executor.memory 4g
+      spark.executor.memory 2g
       spark.driver.memory 2g
       spark.driver.cores 1
       # S3 Configuration
@@ -207,7 +212,7 @@ spark:
 
   image:
     # Host and project in one string on purpose: the release pipeline rewrites
-    # registry.tecnisys.com.br/tdp-dev/... to registry.tecnisys.com.br/tdp/...
+    # registry.tecnisys.com.br/tdp/... to registry.tecnisys.com.br/tdp/...
     # only when both appear together (a split registry:/repository: kept
     # "tdp-dev" in production refs). Empty registry = no prefix.
     registry: ""
@@ -346,9 +351,67 @@ spark:
       targetCPU: 70
       targetMemory: 80
 
-  # Spark history server configuration
+  # Spark History Server, rendered by this chart (templates/history-server*.yaml;
+  # the vendored spark subchart has none). It reads the event logs the drivers
+  # write, so both must see the same directory. While enabled, the chart appends
+  # spark.eventLog.* for that directory to spark-defaults.conf, overriding the
+  # spark.eventLog.enabled false in tdp-spark.customSparkConfig.properties.
   historyServer:
-    enabled: true
+    enabled: false
+    eventLog:
+      # Event log URI when persistence is off. s3a:// needs the S3 settings in
+      # tdp-spark.hadoopConfig (endpoint and credentials); drivers running
+      # outside this chart (Jupyter, Airflow) must write to the same URI.
+      dir: s3a://warehouse/spark-events
+      # Create dir from an init container before the History Server starts:
+      # object stores have no directories until one is created, and both the
+      # History Server and the drivers refuse to start on a missing log dir.
+      createDir: true
+      # Shared volume instead of dir: the event logs live on a PVC mounted at
+      # mountPath in the History Server. The drivers must mount it too: add it
+      # to spark.master/worker.extraVolumes and extraVolumeMounts, as
+      # values-history-server-pvc.yaml does. ReadWriteMany is needed when those
+      # pods can land on different nodes.
+      persistence:
+        enabled: false
+        # Fixed name, so the master/worker volume entries can reference it
+        claimName: spark-history-events
+        # false: use an existing claim with claimName
+        create: true
+        storageClass: ""
+        accessModes:
+          - ReadWriteMany
+        size: 10Gi
+        mountPath: /opt/bitnami/spark/spark-events
+    # Classpath added to the History Server pod's JVMs (SPARK_DIST_CLASSPATH). The
+    # default holds the S3A jars, which are not on Spark's default classpath.
+    # With an s3a:// dir it is also set as spark.driver.extraClassPath, unless
+    # tdp-spark.customSparkConfig.properties already sets one.
+    extraClassPath: /opt/bitnami/spark/optional-jars/iceberg/*
+    # Secret loaded as env vars (e.g. AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY);
+    # empty = spark.master.extraEnvVarsSecret, if set
+    extraEnvVarsSecret: ""
+    # Extra env vars (Kubernetes EnvVar list, valueFrom included) for the History
+    # Server and its init container, e.g. single keys of a Secret whose key
+    # names differ from the env var names extraEnvVarsSecret would produce.
+    extraEnvVars: []
+    service:
+      type: ClusterIP
+      port: 18080
+    # Ingress for the History Server UI, rendered when
+    # TDP-Settings.gateway.ingress.enabled is true. The Gateway API route is
+    # gatewayApi.sparkHistory.
+    ingress:
+      enabled: true
+      # empty = spark.ingress.ingressClassName, then the cluster default
+      ingressClassName: ""
+      hostname: spark-history.${TDP_DOMAIN}
+      annotations: {}
+      tls: []
+    podSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+      fsGroup: 1001
     resources:
       requests:
         cpu: 0.5
@@ -383,21 +446,36 @@ spark:
 # TDP Gateway & Gateway API defaults
 # ==============================================================================
 gatewayApi:
+  # GatewayClass of the chart's own Gateway (gateway.enabled=true only)
+  gatewayClassName: ""
+  # Optional Gateway created by this chart. Leave disabled to attach the
+  # HTTPRoutes to an existing, shared Gateway through parentRefs. TLS
+  # certificates belong on a listener, not on the HTTPRoutes.
+  gateway:
+    enabled: false
+    name: ""
+    listeners: []
+  # Gateway(s) the HTTPRoutes attach to - entries without a name are skipped
   parentRefs: []
+  # Spark Master UI
   spark:
     enabled: false
     hostnames:
-      - spark.tdp.local
+      - spark.${TDP_DOMAIN}
     rules:
       - matches:
           - path:
               type: PathPrefix
               value: /
         backendRefs:
+          # empty = the subchart's <spark fullname>-master-svc
           - name: ""
             port: 80
-    tls:
-      certificateRefs: []
+  # History Server UI (spark.historyServer.enabled=true only)
+  sparkHistory:
+    enabled: true
+    hostnames:
+      - spark-history.${TDP_DOMAIN}
 
 TDP-Settings:
   gateway:
@@ -406,3 +484,22 @@ TDP-Settings:
     gatewayApi:
       enabled: false
 
+
+# Install-time license gate (templates/tdp-license-check.yaml, the same file in
+# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
+# fails in its PreSync hook, unless tdp-license-operator is running and a
+# PlatformLicense covering this chart's product is VALID or WARNING. Install the
+# operator and the license first: scripts/tdp-license-install.sh (Helm) or
+# deploy.sh --install (GitOps kit).
+licenseCheck:
+  # Product the license must cover. Empty means the chart name; a PlatformLicense
+  # with spec.product "*" covers every chart.
+  product: ""
+  # How recently the operator must have verified the license, which proves it is
+  # still running (it re-verifies every 30s by default).
+  maxStatusAgeSeconds: 600
+  # Hook Job used when the chart is rendered without cluster access (ArgoCD):
+  # any image with bash, kubectl, grep and GNU date.
+  image: registry.tecnisys.com.br/community/images/bitnamilegacy/kubectl:latest
+  imagePullSecrets:
+    - name: tdp-registry

@@ -1,0 +1,10 @@
+# Local variables (credentials): copy variables.env to variables.env.local.
+variables.env.local
+
+# Rendered Secrets carry the git and registry credentials from variables.env.
+# deploy.sh applies them with kubectl; they must never be committed.
+current/common/*-secret.yaml
+
+# License files from Tecnisys (TDP_LICENSE_PUBLIC_KEYS_FILE / TDP_LICENSE_FILE):
+# deploy.sh applies them with kubectl; keep them out of the GitOps repository.
+license/
