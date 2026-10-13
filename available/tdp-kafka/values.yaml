@@ -16,48 +16,6 @@
 # - Or createSecret: false and provide existing secret name
 # - Each connector creates topics with the specified topicPrefix
 #
-# Licensing (tdp-license-operator) — see
-# stack/manifests/platform/tdp-platform-license.yaml (one shared whole-platform
-# policy). IMPORTANT, read before assuming this chart is fully protected: the
-# operator only enforces against a Deployment/StatefulSet/CronJob that carries
-# tecnisys.com/licensed=true and tecnisys.com/product on ITS OWN metadata.labels
-# (not pod labels, and not a custom resource's labels). Of everything this
-# chart renders:
-#   - kafka-ui's Deployment (kafka-ui.labels below): reachable, labeled, and
-#     the only piece where license expiry has a real, visible effect (removes
-#     the admin/monitoring UI — clients never go through kafka-ui anyway).
-#   - The Strimzi cluster-operator's Deployment (strimzi-kafka-operator.
-#     commonLabels below): reachable via a small patch to the vendored chart
-#     (stack/charts/upstream/kafka/strimzi-operator/templates/060-Deployment-
-#     strimzi-cluster-operator.yaml — see that chart's DEVNOTES.md for the
-#     patch). Labeled for visibility/consistency, NOT real enforcement: the
-#     operator being scaled to zero does not stop already-running Kafka
-#     brokers from serving traffic.
-#   - Debezium KafkaConnect (opt-in, kafkaConnects.*.enabled, off by default)
-#     and the actual Kafka broker/controller nodes (KafkaNodePool "brokers")
-#     have no Deployment/StatefulSet at all: Strimzi 0.48.0 manages both via
-#     StrimziPodSet, a CRD tdp-license-operator does not watch
-#     (pkg/enforcement/enforcement.go only ever lists Deployments,
-#     StatefulSets and CronJobs). Verified live:
-#     `spec.template.deployment.metadata.labels` on a KafkaConnect CR is
-#     explicitly deprecated and ignored by this Strimzi version ("Kafka
-#     Connect and MirrorMaker 2 operands do not use Deployment resources
-#     anymore"). A template-only fix was tried and reverted for that reason
-#     (see git history on templates/kafka-connect.yaml).
-#     The brokers ARE, however, reachable at the *Pod* level: the license
-#     labels in extraLabels below land on each broker Pod's own
-#     metadata.labels (via Kafka/KafkaNodePool spec.template.pod), which is
-#     verified and is NOT deprecated. tdp-license-operator's optional
-#     podEnforcement (off by default) uses them: while a license is blocked
-#     it evicts these pods and denies their re-creation at admission. The
-#     operator also counts them for the lease's worker-node limit. Without
-#     podEnforcement, license expiry does not stop the brokers.
-#     Full live evaluation of every candidate mechanism — including why
-#     NetworkPolicy and Service-selector tricks cannot work here, and why
-#     scaling KafkaNodePool.spec.replicas must never be used — is in
-#     tests/license/KAFKA_ALTERNATIVE_ENFORCEMENT_TEST_REPORT.md.
-# Remove the tecnisys.com/* keys below (or kafka-ui.labels') to opt the
-# respective piece out of enforcement.
 # ==============================================================================
 
 # Disabled by default: the Strimzi Operator is now a single, cluster-wide
@@ -73,13 +31,10 @@
 # anywhere else in the cluster.
 strimzi-kafka-operator:
   enabled: false
-  # Only takes effect when enabled above. Lands on the Strimzi
-  # cluster-operator Deployment's own metadata.labels (verified via
-  # `helm template`) via a patch to the vendored chart — see the licensing
-  # note near the top of this file.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   commonLabels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-kafka
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-kafka
 
 name: tdp-kafka
 kafkaVersion: 4.1.0
@@ -208,8 +163,8 @@ nodePool:
 # These are deliberately much more permissive than Strimzi's defaults
 # (initialDelaySeconds 15 / timeoutSeconds 5 / periodSeconds 10 /
 # failureThreshold 3). Those defaults are unsafe whenever every broker starts
-# at once — a full-cluster restart, a node-pool recreation, or a license
-# enforcement/restore cycle. Validated live: with the defaults, four
+# at once — a full-cluster restart, a node-pool recreation, or scaling the
+# whole cluster down and back up. Validated live: with the defaults, four
 # combined-role KRaft nodes recovering logs and forming a metadata quorum
 # concurrently exceed the 5s exec timeout of /opt/kafka/kafka_liveness.sh;
 # three misses (~30s) trigger SIGTERM, which prevents the quorum from ever
@@ -235,12 +190,9 @@ probes:
 # PVCs and Services.
 extraLabels:
   tecnisys.io/cluster: tdp
-  # Reaches the broker Pods' own metadata.labels — verified live. This is what
-  # lets license enforcement target the brokers at the Pod level, which is the
-  # only interception point that works for a StrimziPodSet-managed workload.
-  # See the "Licensing" note at the top of this file.
-  tecnisys.com/licensed: "true"
-  tecnisys.com/product: tdp-kafka
+  # TDP license labels. Do not change or remove.
+  tecnisys.io/licensed: "true"
+  tecnisys.io/product: tdp-kafka
 
 tdp-kafka:
   enabled: true
@@ -250,18 +202,14 @@ kafka-ui:
   name: kafka-ui
   enabled: true
 
-  # Lands on the kafka-ui Deployment's own metadata.labels (verified via
-  # `helm template`) — the license opt-in for this chart's one workload the
-  # operator can actually reach. See the licensing note near the top of
-  # this file for what is and isn't covered.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   labels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-kafka
-  # The same pair on the kafka-ui pods: the operator counts the worker nodes
-  # running TDP from pods (status.capacity), not from their Deployments.
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-kafka
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   podLabels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-kafka
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-kafka
 
   # kafka-ui's own config source is yamlApplicationConfigConfigMap below;
   # yamlApplicationConfig must stay null so it doesn't also render (see the
@@ -525,18 +473,12 @@ TDP-Settings:
     gatewayApi:
       enabled: false
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.

@@ -363,7 +363,7 @@ install_license() {
     print_info "  ✓ secret $ns/tecnisys-license-lease"
 
     # Whole-platform licensing: one LicensePolicy + PlatformLicense pair with
-    # product "*" governs every tecnisys.com/licensed=true workload in the
+    # product "*" governs every tecnisys.io/licensed=true workload in the
     # namespaces below.
     local governed="${TDP_LICENSE_POLICY_NAMESPACES:-$TDP_NAMESPACE}" ns_list="" item
     local -a governed_list

@@ -35,18 +35,11 @@ tdp-superset:
   imagePullSecrets:
     - name: tdp-registry
 
-  # `extraLabels` lands on each resource's own metadata.labels (verified
-  # via `helm template`, not just pod labels), so it also carries the
-  # Tecnisys licensing opt-in (tecnisys.com/licensed, tecnisys.com/product)
-  # for the Superset node/worker/celerybeat Deployments. See
-  # stack/manifests/platform/tdp-platform-license.yaml (one shared whole-platform policy) — requires
-  # tdp-license-crds and tdp-license-operator to be installed. Remove the
-  # two tecnisys.com/* labels here (and under postgresql.commonLabels /
-  # redis.commonLabels below) to opt this chart out of enforcement.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   extraLabels:
     tecnisys.io/cluster: "tdp"
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-superset
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-superset
 
   postgresqlSecrets:
     name: ""
@@ -410,13 +403,10 @@ tdp-superset:
   # ======================================
   postgresql:
     enabled: true
-    # Bundled internal metadata DB — part of the tdp-superset release, so it
-    # carries the same licensing labels as the rest of the chart (see
-    # tdp-superset.extraLabels above). `commonLabels` lands on this
-    # StatefulSet's own metadata.labels (verified via `helm template`).
+    # TDP platform labels, required by the TDP license. Do not change or remove.
     commonLabels:
-      tecnisys.com/licensed: "true"
-      tecnisys.com/product: tdp-superset
+      tecnisys.io/licensed: "true"
+      tecnisys.io/product: tdp-superset
     auth:
       postgresPassword: "ChangeMe!T3c"
       password: "ChangeMe!T3c"
@@ -448,13 +438,10 @@ tdp-superset:
   # ======================================
   redis:
     enabled: true
-    # Bundled internal cache/broker — part of the tdp-superset release, so
-    # it carries the same licensing labels as the rest of the chart (see
-    # tdp-superset.extraLabels above). `commonLabels` lands on this
-    # StatefulSet's own metadata.labels (verified via `helm template`).
+    # TDP platform labels, required by the TDP license. Do not change or remove.
     commonLabels:
-      tecnisys.com/licensed: "true"
-      tecnisys.com/product: tdp-superset
+      tecnisys.io/licensed: "true"
+      tecnisys.io/product: tdp-superset
     architecture: standalone
     image:
       registry: registry.tecnisys.com.br
@@ -545,18 +532,12 @@ TDP-Settings:
     gatewayApi:
       enabled: false
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.

@@ -15,21 +15,10 @@ tdp-ranger:
   # Cluster label for selector compatibility
   clusterLabel: "tdp"
 
-  # tdp-license-operator enforcement (tecnisys.com/licensed, tecnisys.com/product
-  # — see stack/manifests/platform/tdp-platform-license.yaml, the shared
-  # whole-platform policy also used by tdp-trino/tdp-argo/tdp-clickhouse/
-  # tdp-hive-metastore): commonLabels below is merged into apache-ranger.labels
-  # (stack/charts/upstream/ranger/apache-ranger/templates/_helpers.tpl) and
-  # reaches all 5 Deployments' own metadata.labels (ranger, ranger-db,
-  # ranger-solr, ranger-zk, ranger-usersync) — license expiry scales the
-  # whole Ranger stack together — and their pods, which the operator counts
-  # as worker nodes running TDP (status.capacity). Deliberately kept separate from
-  # `clusterLabel` above (which already emits tecnisys.io/cluster on its
-  # own) to avoid emitting that key twice. Remove the two tecnisys.com/*
-  # keys below to opt this chart out of enforcement.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   commonLabels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-ranger
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-ranger
 
   imagePullSecrets:
     - name: tdp-registry
@@ -418,18 +407,12 @@ ingress:
           pathType: Prefix
   tls: []
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.

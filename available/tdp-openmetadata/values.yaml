@@ -73,20 +73,12 @@ tdp-openmetadata:
   fullnameOverride: ""
   # Cluster label for selector compatibility with kustomize post-renderer
   clusterLabel: ""
-  # tecnisys.com/licensed + tecnisys.com/product wire the OpenMetadata server
-  # Deployment AND its cron-deploy-pipelines/cron-reindex CronJobs (all three
-  # render via the "OpenMetadata.labels" helper, which merges commonLabels
-  # into each resource's own metadata.labels - verified with `helm template`
-  # to land exactly once, no duplication) into tdp-license-operator
-  # enforcement. See stack/manifests/platform/tdp-platform-license.yaml (one shared whole-platform policy).
-  # Remove both tecnisys.com/* keys below to opt this chart out.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   commonLabels:
     tecnisys.io/cluster: "tdp"
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-openmetadata
-  # Not wired into licensing enforcement: disabled by default and renders no
-  # Deployment (omjobOperator.enabled defaults to false upstream). Revisit if
-  # a future rollout enables the OMJob operator.
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-openmetadata
+  # Disabled by default (renders no Deployment).
   omjobOperator:
     enabled: false
 
@@ -389,39 +381,23 @@ openmetadata-dependencies:
             secretKeyRef:
               name: mysql-secrets
               key: openmetadata-mysql-password
-    # Labels for MySQL pods. tecnisys.com/licensed + tecnisys.com/product
-    # also land on the MySQL primary StatefulSet's own metadata.labels (via
-    # the bitnami "common.labels.standard" helper - verified with
-    # `helm template` to land exactly once, no duplication), governed by the
-    # SAME tdp-openmetadata LicensePolicy: MySQL is OpenMetadata's metadata
-    # store, an internal dependency that should scale down together with the
-    # server rather than be governed separately. Remove both tecnisys.com/*
-    # keys to opt MySQL out.
+    # TDP platform labels, required by the TDP license. Do not change or remove.
     commonLabels:
       tecnisys.io/cluster: "tdp"
-      tecnisys.com/licensed: "true"
-      tecnisys.com/product: tdp-openmetadata
-  # Airflow disabled - using K8s pipeline client instead. Not wired into
-  # licensing enforcement since it renders no resources by default; revisit
-  # if pipelineServiceClientConfig.type is ever switched back to "airflow"
-  # (openmetadata-dependencies.airflow.enabled: true).
+      tecnisys.io/licensed: "true"
+      tecnisys.io/product: tdp-openmetadata
+  # Airflow disabled - using K8s pipeline client instead.
   airflow:
     enabled: false
   opensearch:
     fullnameOverride: "tdp-openmetadata-opensearch"
     rbac:
       create: true
-    # Labels for OpenSearch pods. tecnisys.com/licensed + tecnisys.com/product
-    # also land on the OpenSearch StatefulSet's own metadata.labels (via the
-    # "opensearch.labels" helper - verified with `helm template` to land
-    # exactly once, no duplication), governed by the SAME tdp-openmetadata
-    # LicensePolicy: OpenSearch backs OpenMetadata's search/lineage index, an
-    # internal dependency that should scale down together with the server.
-    # Remove both tecnisys.com/* keys to opt OpenSearch out.
+    # TDP platform labels, required by the TDP license. Do not change or remove.
     labels:
       tecnisys.io/cluster: "tdp"
-      tecnisys.com/licensed: "true"
-      tecnisys.com/product: tdp-openmetadata
+      tecnisys.io/licensed: "true"
+      tecnisys.io/product: tdp-openmetadata
 
 # ==============================================================================
 # DATASOURCES INTEGRATION (disabled by default)
@@ -571,18 +547,12 @@ TDP-Settings:
     gatewayApi:
       enabled: false
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.

@@ -18,22 +18,11 @@ tdp-airflow:
   # Enable/disable the Airflow deployment
   enabled: true
 
-  # Common labels applied to Airflow resources.
-  # This is the platform standard cluster label, plus the Tecnisys licensing
-  # opt-in (tecnisys.com/licensed, tecnisys.com/product). See
-  # stack/manifests/platform/tdp-platform-license.yaml (one shared whole-platform policy) — requires
-  # tdp-license-crds and tdp-license-operator to be installed.
-  # NOTE: unlike tdp-trino's coordinator.labels/worker.labels, the upstream
-  # airflow chart's per-component `apiServer.labels`/`scheduler.labels`/etc.
-  # fields only reach the pod template, not the Deployment/StatefulSet's own
-  # metadata.labels (confirmed by reading the chart's templates) — so this
-  # chart-wide `labels` field is the only hook that actually lands on the
-  # workload objects themselves, and it's what the operator reads. Remove
-  # the two tecnisys.com/* labels here to opt this chart out of enforcement.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   labels:
     tecnisys.io/cluster: tdp
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-airflow
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-airflow
 
   # Provide a name to substitute for the full names of resources
   fullnameOverride: ""
@@ -645,18 +634,12 @@ ingress:
           pathType: Prefix
   tls: []
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.

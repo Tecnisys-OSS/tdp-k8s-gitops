@@ -107,7 +107,7 @@ cp variables.env variables.env.local
 | `TDP_OPENMETADATA_DATABASE` | `postgresql` | OpenMetadata's metadata database: `mysql` (bundled, default) or `postgresql` (the kit's `tdp-postgresql`, deployed first). Sets `global.TDP-Settings.database` in its `values-gitops.yaml` |
 | `TDP_LICENSE_PUBLIC_KEYS_FILE`, `TDP_LICENSE_FILE` | `license/keys.json`, `license/lease.json` | The license files from Tecnisys, relative to the variables file. `license/` is git-ignored. The lease can also be the `tecnisys-license-lease` Secret manifest |
 | `TDP_LICENSE_NAMESPACE` | `tdp-system` | Where `tdp-license-operator` and the `PlatformLicense` live (default `tdp-system`) |
-| `TDP_LICENSE_POLICY_NAMESPACES` | `tdp,tdp-data` | Namespaces whose licensed workloads the license governs, comma-separated (empty = `TDP_NAMESPACE`) |
+| `TDP_LICENSE_POLICY_NAMESPACES` | `tdp,tdp-data` | Namespaces where the TDP components run, covered by the license, comma-separated (empty = `TDP_NAMESPACE`) |
 | `TDP_DEFAULT_PASSWORD` | `'ChangeMe!T3c'` | Fallback for every empty `TDP_*_PASSWORD` below |
 | `TDP_<COMPONENT>_..._PASSWORD` | empty | UI admin logins (Airflow, CloudBeaver, Jupyter, Kafka UI, Ranger, Superset) and the database users set in values (Airflow, Hive and Superset built-in PostgreSQL, Ranger, the ClickHouse `trino`/`superset` users); the list is in `variables.env` |
 | `TDP_SUPERSET_SECRET_KEY` | empty | Superset `SECRET_KEY` (signs sessions, encrypts the connection passwords Superset stores). Empty: `deploy.sh` keeps the key already in `current/tdp-superset/`, or generates one on the first render; copy it to your variables file to pin it |
@@ -128,7 +128,7 @@ What runs, in order:
 
 1. `helm registry login` — authenticates to the OCI registry.
 2. `helm upgrade --install tdp-crds` — the cluster CRDs; skipped when both the ArgoCD and the license CRDs already exist.
-3. The license, in `TDP_LICENSE_NAMESPACE`: the `tdp-registry` pull secret, `helm upgrade --install tdp-license` (tdp-license-operator and its admission webhook, trusting the public keys), the `tecnisys-license-lease` Secret, and a whole-platform `LicensePolicy` + `PlatformLicense` pair. It then waits for the operator to verify the lease and **stops if the license is not VALID**.
+3. The license, in `TDP_LICENSE_NAMESPACE`: the `tdp-registry` pull secret, `helm upgrade --install tdp-license` with the public keys, and the license. It then waits for the license to be verified and **stops if it is not VALID**.
 4. `helm upgrade --install tdp-argo` — ArgoCD in `ARGOCD_NAMESPACE`, with `application.namespaces: "*"` so it can manage Applications in any namespace, and the UI exposed at `argo.${TDP_DOMAIN}` per `TDP_EXPOSE` (see Step 4); waits for the server and the application controller.
 5. `envsubst` on `common/` → `current/common/`. Components are rendered separately, in Step 6.
 6. `kubectl apply` of `current/common/` (creating `TDP_NAMESPACE` if needed):
@@ -138,12 +138,12 @@ What runs, in order:
    - `tdp-image-pull-secret.yaml` — the `tdp-registry` image pull secret in `TDP_NAMESPACE`. An existing `tdp-registry` is kept unless you pass `--force`.
    - `argo-gitops-app-of-apps.yaml` — the App of Apps
 
-#### The license gate
+#### The license check
 
-Every TDP chart (`tdp-argo`, `tdp-operator` and each component in `available/`) refuses to install unless `tdp-license-operator` is running and a `PlatformLicense` covering it is VALID (or WARNING) and was verified by the operator in the last 10 minutes:
+Every TDP chart (`tdp-argo`, `tdp-operator` and each component in `available/`) refuses to install without a VALID TDP license:
 
 - `helm install`/`upgrade` (as `--install` does for `tdp-argo`) fails before creating anything, with a `[<chart>] license check failed: …` message.
-- ArgoCD cannot run that check while rendering, so each chart also renders a `<release>-license-check` PreSync hook Job that runs it. Without a valid license the hook fails and ArgoCD applies nothing from that Application; once the license is VALID again, the next sync goes through.
+- Under ArgoCD, the sync of that Application fails in its `<release>-license-check` PreSync hook and nothing is applied; once the license is VALID again, the next sync goes through.
 
 > **Using an ArgoCD you installed yourself?** Skip `--install`: run `./deploy.sh --license -v variables.env.local` to install the license, then `./deploy.sh -c -v variables.env.local`. Make sure that ArgoCD manages Applications in `TDP_PROJECT_NAMESPACE`:
 >
@@ -156,7 +156,7 @@ Every TDP chart (`tdp-argo`, `tdp-operator` and each component in `available/`) 
 
 #### Worker-node limit
 
-A license can also limit how many Kubernetes nodes may run TDP. The operator counts the nodes running pods labeled `tecnisys.com/licensed=true` in the `TDP_LICENSE_POLICY_NAMESPACES`. When there are more than the license allows for over 15 minutes, it reports `UNDER_LICENSED`: `kubectl get platformlicense -A` shows `NODES`, `MAX` and `CAPACITY`, and an `UnderLicensed` event and the `tecnisys_license_under_licensed` metric are raised. This is an alert only: nothing is stopped or refused. On a cluster upgraded from an older kit, `deploy.sh` warns when the `PlatformLicense` CRD is too old to report it, and prints the commands to update it.
+A license can also limit how many Kubernetes nodes may run TDP. `kubectl get platformlicense -A` shows the nodes in use (`NODES`), the limit (`MAX`) and the status (`CAPACITY`); `UNDER_LICENSED` means more nodes run TDP than the license allows. On a cluster upgraded from an older kit, `deploy.sh` warns when the `PlatformLicense` CRD is too old to report it, and prints the commands to update it.
 
 ### Step 4 — Expose the ArgoCD UI
 
@@ -463,7 +463,7 @@ git add current/ && git commit -m "chore: render" && git push
 | Sync stuck on `waiting for healthy state` | A sync waiting for pods that never become healthy has no timeout, so new commits wait | Fix the cause, then Terminate the operation in the ArgoCD UI; auto-sync starts over |
 | Application `OutOfSync` after a push | Not refreshed yet | `kubectl annotate application <name> -n <TDP_PROJECT_NAMESPACE> argocd.argoproj.io/refresh=hard --overwrite` |
 | `[tdp-argo] license check failed: …` from `--install`, or `helm install` of a TDP chart | No `tdp-license-operator`, no `PlatformLicense`, or a license that is not VALID | Read the message, fix the license files, run `./deploy.sh --license -v variables.env.local` |
-| `kubectl get platformlicense -A` shows `CAPACITY UNDER_LICENSED` | More nodes run licensed TDP pods than the license allows, for longer than 15 minutes. An alert only: nothing is stopped | `kubectl get pods -A -l tecnisys.com/licensed=true -o wide` shows where they run; reduce the nodes TDP runs on, or ask Tecnisys for a license with more nodes |
+| `kubectl get platformlicense -A` shows `CAPACITY UNDER_LICENSED` | More nodes run TDP than the license allows | Reduce the nodes TDP runs on, or ask Tecnisys for a license with more nodes |
 | Application sync fails on the PreSync hook `<release>-license-check` | Same, for a component synced by ArgoCD | `kubectl -n <TDP_NAMESPACE> logs job/<release>-license-check`; once `kubectl get platformlicense -A` shows VALID, sync again |
 | Variables not substituted (`${VAR}` in the cluster) | A template from `available/` or `common/` was applied directly | Always apply or push `current/`, rendered by `deploy.sh` |
 | Git or registry authentication errors | Wrong credentials, or an unquoted `$` in `variables.env.local` | Check `kubectl -n <ARGOCD_NAMESPACE> get secret tdp-devops-repo tdp-helm-oci-tdp`; re-run `./deploy.sh -c` |

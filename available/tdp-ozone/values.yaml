@@ -9,27 +9,6 @@
 # - Keep a single source of truth: values.yaml.
 # - Environment-specific configurations: use values-{env}.yaml files.
 #
-# Licensing (tdp-license-operator) — wired via commonLabels below.
-# tdp-license-operator only enforces against a Deployment/StatefulSet/
-# CronJob that carries tecnisys.com/licensed=true and tecnisys.com/product
-# on ITS OWN metadata.labels. This chart renders 4 StatefulSets by default
-# (om, scm, datanode, s3g, via the vendored charts/upstream/ozone/ozone
-# subchart); commonLabels below reaches all of them (and this chart's own
-# Secret/ConfigMap) via a fix to this chart's templates/_helpers.tpl: its
-# ozone.labels/ozone.selectorLabels overrides (which Helm's global,
-# cross-chart template namespace resolves in place of the vendored
-# subchart's own versions, including from inside the vendored subchart's
-# own templates) now resolve commonLabels relative to whichever context
-# they're actually called from, instead of only ever checking the
-# umbrella's own root context. Verified via `helm template`: commonLabels
-# lands on every om/scm/datanode/s3g StatefulSet's own metadata.labels,
-# exactly once, without touching spec.selector.matchLabels (which is
-# immutable once a StatefulSet exists — see the comment on
-# ozone.selectorLabels in that file for why it's deliberately excluded
-# there). See stack/manifests/platform/tdp-platform-license.yaml (one
-# shared whole-platform policy) for the LicensePolicy/PlatformLicense
-# pair. Remove the two tecnisys.com/* labels below to opt this chart out
-# of enforcement.
 # ==============================================================================
 
 # OpenShift-specific configuration
@@ -41,19 +20,15 @@ openshift:
 tdp-ozone:
   # Container security context for OpenShift
   containerSecurityContext: {}
-  # Common labels — reaches every resource this chart and the vendored
-  # ozone subchart render (StatefulSets included). See the licensing note
-  # above.
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   commonLabels:
     tecnisys.io/cluster: tdp
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-ozone
-  # The same pair on the om/scm/datanode/s3g/recon pods (commonLabels stops
-  # at the StatefulSets/Deployment): the operator counts the worker nodes
-  # running TDP from pods (status.capacity). Remove it here too to opt out.
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-ozone
+  # TDP platform labels, required by the TDP license. Do not change or remove.
   podLabels:
-    tecnisys.com/licensed: "true"
-    tecnisys.com/product: tdp-ozone
+    tecnisys.io/licensed: "true"
+    tecnisys.io/product: tdp-ozone
 
   # Common security context (applied to pod level)
   # Configured to satisfy PodSecurity "restricted" profile
@@ -634,18 +609,12 @@ TDP-Settings:
     gatewayApi:
       enabled: false
 
-# Install-time license gate (templates/tdp-license-check.yaml, the same file in
-# every TDP component chart). helm install/upgrade fails, and an ArgoCD sync
-# fails in its PreSync hook, unless tdp-license-operator is running and a
-# PlatformLicense covering this chart's product is VALID or WARNING. Install the
-# operator and the license first: scripts/tdp-license-install.sh (Helm) or
-# deploy.sh --install (GitOps kit).
+# Install-time license check: installation fails unless a valid TDP license is
+# installed (scripts/tdp-license-install.sh or deploy.sh --install).
 licenseCheck:
-  # Product the license must cover. Empty means the chart name; a PlatformLicense
-  # with spec.product "*" covers every chart.
+  # Product the license must cover. Empty means the chart name.
   product: ""
-  # How recently the operator must have verified the license, which proves it is
-  # still running (it re-verifies every 30s by default).
+  # Do not change unless asked by Tecnisys support.
   maxStatusAgeSeconds: 600
   # Hook Job used when the chart is rendered without cluster access (ArgoCD):
   # any image with bash, kubectl, grep and GNU date.
